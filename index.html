@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BizTrack</title>
-    <link rel="stylesheet" href="static/app.css?v=3" />
+    <link rel="stylesheet" href="static/app.css?v=4" />
   </head>
   <body>
     <section id="auth-screen" class="auth-screen">
@@ -205,6 +205,13 @@
                 <option value="monthly" selected>Last 30 days</option>
                 <option value="custom">Custom dates</option>
               </select>
+              <button
+                id="custom-period-toggle"
+                class="btn small custom-period-toggle"
+                type="button"
+              >
+                Custom dates
+              </button>
               <div id="custom-date-range" class="hidden">
                 <input
                   id="report-start"

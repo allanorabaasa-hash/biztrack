@@ -580,6 +580,7 @@ const reloadReports = () =>
 
 const periodSelect = document.getElementById("report-period");
 const customRange = document.getElementById("custom-date-range");
+const customPeriodToggle = document.getElementById("custom-period-toggle");
 const today = new Date();
 document.getElementById("report-end").value = isoDate(today);
 document.getElementById("report-start").value = isoDate(
@@ -588,7 +589,17 @@ document.getElementById("report-start").value = isoDate(
 periodSelect.addEventListener("change", () => {
   activePeriod = periodSelect.value;
   customRange.classList.toggle("hidden", activePeriod !== "custom");
+  customRange.classList.remove("mobile-custom-open");
   if (activePeriod !== "custom") reloadReports();
+});
+customPeriodToggle.addEventListener("click", () => {
+  activePeriod = "custom";
+  periodSelect.value = "custom";
+  customRange.classList.remove("hidden");
+  customRange.classList.toggle(
+    "mobile-custom-open",
+    !customRange.classList.contains("mobile-custom-open"),
+  );
 });
 document.getElementById("apply-custom-period").addEventListener("click", () => {
   const start = document.getElementById("report-start").value;
@@ -597,6 +608,7 @@ document.getElementById("apply-custom-period").addEventListener("click", () => {
     showToast("Choose a start date that comes before the end date.", true);
     return;
   }
+  customRange.classList.remove("mobile-custom-open");
   reloadReports();
 });
 
