@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BizTrack</title>
+    <link rel="stylesheet" href="static/app.css?v=3" />
+  </head>
+  <body>
+    <section id="auth-screen" class="auth-screen">
+      <div class="auth-card">
+        <div class="brand auth-brand"><span>BizTrack</span></div>
+        <div id="login-panel">
+          <h1>Welcome back</h1>
+          <p>Sign in to your private offline workspace.</p>
+          <form id="login-form" class="inline">
+            <div>
+              <label>Email</label
+              ><input
+                name="email"
+                type="email"
+                autocomplete="username"
+                required
+              />
+            </div>
+            <div>
+              <label>Password</label
+              ><input
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+              />
+            </div>
+            <button class="btn" type="submit">Log in</button>
+          </form>
+          <button id="show-signup" class="text-button" type="button">
+            Create an account
+          </button>
+        </div>
+        <div id="signup-panel" class="hidden">
+          <h1>Create account</h1>
+          <p>Your data is encrypted locally with your password.</p>
+          <form id="signup-form" class="inline">
+            <div>
+              <label>Name</label
+              ><input name="name" autocomplete="name" required />
+            </div>
+            <div>
+              <label>Email</label
+              ><input
+                name="email"
+                type="email"
+                autocomplete="username"
+                required
+              />
+            </div>
+            <div>
+              <label>Password</label
+              ><input
+                name="password"
+                type="password"
+                minlength="10"
+                autocomplete="new-password"
+                required
+              />
+            </div>
+            <button class="btn" type="submit">Create account</button>
+          </form>
+          <button id="show-login" class="text-button" type="button">
+            I already have an account
+          </button>
+        </div>
+        <p id="auth-message" class="auth-message" role="status"></p>
+      </div>
+    </section>
+    <div class="app">
+      <button class="mobile-menu-btn" type="button" aria-label="Toggle menu">
+        ☰ Menu
+      </button>
+      <div class="sidebar">
+        <div class="brand">Biz<span>Track</span></div>
+        <div class="business-picker">
+          <label for="business-select">Current business</label>
+          <select id="business-select">
+            <option value="">Select a business</option>
+          </select>
+        </div>
+        <div class="nav-item active" data-tab="businesses">Businesses</div>
+        <div class="nav-item" data-tab="dashboard">Dashboard</div>
+        <div class="nav-item" data-tab="accounting">Accounting</div>
+        <div class="nav-item" data-tab="inventory">Inventory</div>
+        <div class="nav-item" data-tab="market">Market Intelligence</div>
+        <div class="nav-item" data-tab="sales">Sales</div>
+        <div class="nav-item" data-tab="overall">Overall Profit &amp; Loss</div>
+      </div>
+      <div class="main">
+        <div id="tab-businesses" class="tab">
+          <div class="topbar">
+            <div>
+              <h1>Businesses</h1>
+              <div class="sub">
+                Add or select a business. Each business has its own records and
+                the same BizTrack features.
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="section-title">Your businesses</div>
+              <div id="business-list" class="business-list"></div>
+            </div>
+            <div class="card">
+              <div class="section-title">Add business</div>
+              <form id="business-form" class="inline">
+                <div>
+                  <label>Business name</label
+                  ><input
+                    name="name"
+                    placeholder="e.g. Kato Retail Shop"
+                    required
+                  />
+                </div>
+                <div>
+                  <label>Business type (optional)</label
+                  ><input name="business_type" placeholder="e.g. Retail" />
+                </div>
+                <button class="btn" type="submit">Add Business</button>
+              </form>
+            </div>
+          </div>
+        </div>
+        <div id="tab-overall" class="tab hidden">
+          <div class="topbar">
+            <div>
+              <h1>Overall Profit &amp; Loss</h1>
+              <div class="sub">
+                All-time combined financial performance across every business.
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-3" style="margin-bottom: 16px">
+            <div class="card">
+              <div class="stat-label">Total Income</div>
+              <div class="stat-value" id="overall-income">—</div>
+            </div>
+            <div class="card">
+              <div class="stat-label">Total Expenses</div>
+              <div class="stat-value" id="overall-expenses">—</div>
+            </div>
+            <div class="card">
+              <div class="stat-label">Net Profit / Loss</div>
+              <div class="stat-value" id="overall-net">—</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="section-title">Profit &amp; loss by business</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Business</th>
+                  <th style="text-align: right">Income</th>
+                  <th style="text-align: right">Expenses</th>
+                  <th style="text-align: right">Net profit / loss</th>
+                </tr>
+              </thead>
+              <tbody id="overall-businesses"></tbody>
+            </table>
+          </div>
+        </div>
+        <!-- DASHBOARD -->
+        <div id="tab-dashboard" class="tab hidden">
+          <div class="topbar">
+            <div>
+              <h1>Business Performance</h1>
+              <div class="sub">
+                Compare sales, cash flow, and stock activity for any period.
+              </div>
+            </div>
+            <div class="report-filter dashboard-period">
+              <label for="report-period">View period</label>
+              <select id="report-period">
+                <option value="daily">Today</option>
+                <option value="weekly">Last 7 days</option>
+                <option value="monthly" selected>Last 30 days</option>
+                <option value="custom">Custom dates</option>
+              </select>
+              <div id="custom-date-range" class="hidden">
+                <input
+                  id="report-start"
+                  type="date"
+                  aria-label="Report start date"
+                />
+                <input
+                  id="report-end"
+                  type="date"
+                  aria-label="Report end date"
+                />
+                <button
+                  id="apply-custom-period"
+                  class="btn small"
+                  type="button"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-4" style="margin-bottom: 16px">
+            <div class="card">
+              <div class="stat-label" id="d-sales-label">Sales</div>
+              <div class="stat-value" id="d-sales">—</div>
+              <div class="sub" id="d-sales-units"></div>
+            </div>
+            <div class="card">
+              <div class="stat-label" id="d-income-label">Income</div>
+              <div class="stat-value" id="d-today-sales">—</div>
+            </div>
+            <div class="card">
+              <div class="stat-label" id="d-expenses-label">Expenses</div>
+              <div class="stat-value" id="d-today-expenses">—</div>
+            </div>
+            <div class="card">
+              <div class="stat-label" id="d-profit-label">Net Profit</div>
+              <div class="stat-value" id="d-net-profit">—</div>
+            </div>
+            <div class="card">
+              <div class="stat-label">Outstanding Invoices</div>
+              <div class="stat-value" id="d-outstanding">—</div>
+            </div>
+          </div>
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="section-title" id="cashflow-title">Cash Flow</div>
+              <canvas
+                id="cashflow-chart"
+                class="chart-canvas"
+                height="220"
+                aria-label="30-day income and expense chart"
+              ></canvas>
+            </div>
+            <div class="card">
+              <div class="section-title" id="inventory-title">
+                Inventory status
+              </div>
+              <div class="inventory-summary" id="d-inventory-summary"></div>
+              <div id="d-low-stock"></div>
+            </div>
+          </div>
+          <div class="card" style="margin-top: 16px">
+            <div class="section-title">Top Selling Products</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Qty Sold</th>
+                  <th>Revenue</th>
+                </tr>
+              </thead>
+              <tbody id="d-top-products"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ACCOUNTING -->
+        <div id="tab-accounting" class="tab hidden">
+          <div class="topbar"><h1>Accounting</h1></div>
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="section-title">Record Transaction</div>
+              <form class="inline" id="txn-form">
+                <div>
+                  <label>Type</label
+                  ><select name="type">
+                    <option value="income">Income</option>
+                    <option value="expense">Expense</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Category</label
+                  ><input
+                    name="category"
+                    list="transaction-categories"
+                    placeholder="e.g. Sales, Rent"
+                    required
+                  />
+                  <datalist id="transaction-categories">
+                    <option value="Sales"></option>
+                    <option value="Stock Purchase"></option>
+                    <option value="Rent"></option>
+                    <option value="Transport"></option>
+                    <option value="Salaries"></option>
+                    <option value="Utilities"></option>
+                  </datalist>
+                </div>
+                <div>
+                  <label>Description</label
+                  ><input name="description" placeholder="Optional" />
+                </div>
+                <div>
+                  <label>Amount (UGX)</label
+                  ><input
+                    name="amount"
+                    type="number"
+                    min="1"
+                    step="1"
+                    placeholder="e.g. 50000"
+                    required
+                  />
+                </div>
+                <button class="btn" id="txn-submit" type="submit">
+                  Add Transaction
+                </button>
+              </form>
+            </div>
+            <div class="card">
+              <div class="section-title" id="pl-title">Profit &amp; Loss</div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Income</th>
+                    <th style="text-align: right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody id="pl-income"></tbody>
+              </table>
+              <table style="margin-top: 10px">
+                <thead>
+                  <tr>
+                    <th>Expenses</th>
+                    <th style="text-align: right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody id="pl-expense"></tbody>
+              </table>
+              <div
+                style="
+                  margin-top: 14px;
+                  padding-top: 12px;
+                  border-top: 1px solid var(--line);
+                  display: flex;
+                  justify-content: space-between;
+                  font-weight: 700;
+                "
+              >
+                <span>Net Profit</span><span id="pl-net">—</span>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="margin-top: 16px">
+            <div class="section-title">Recent Transactions</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Category</th>
+                  <th>Description</th>
+                  <th style="text-align: right">Amount</th>
+                </tr>
+              </thead>
+              <tbody id="txn-list"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- INVENTORY -->
+        <div id="tab-inventory" class="tab hidden">
+          <div class="topbar"><h1>Inventory</h1></div>
+          <div class="card">
+            <div class="section-title">Products</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Category</th>
+                  <th>Stock</th>
+                  <th>Reorder Level</th>
+                  <th>Cost Price</th>
+                  <th>Sell Price</th>
+                  <th>Adjust</th>
+                </tr>
+              </thead>
+              <tbody id="inv-list"></tbody>
+            </table>
+          </div>
+          <div class="card" style="margin-top: 16px">
+            <div class="section-title">Add Product</div>
+            <form class="inline inline-row" id="product-form">
+              <div><label>Name</label><input name="name" required /></div>
+              <div><label>Category</label><input name="category" /></div>
+              <div>
+                <label>Unit</label
+                ><input name="unit" placeholder="bag / carton" />
+              </div>
+              <div></div>
+              <div>
+                <label>Stock Qty</label
+                ><input name="stock_qty" type="number" value="0" />
+              </div>
+              <div>
+                <label>Reorder Level</label
+                ><input name="reorder_level" type="number" value="0" />
+              </div>
+              <div>
+                <label>Cost Price</label
+                ><input name="cost_price" type="number" value="0" />
+              </div>
+              <div>
+                <label>Sell Price</label
+                ><input name="sell_price" type="number" value="0" />
+              </div>
+            </form>
+            <button class="btn" id="product-submit" style="margin-top: 12px">
+              Add Product
+            </button>
+          </div>
+        </div>
+
+        <!-- MARKET INTELLIGENCE -->
+        <div id="tab-market" class="tab hidden">
+          <div class="topbar">
+            <div>
+              <h1>Market Intelligence</h1>
+              <div class="sub">
+                Your price vs. live supplier &amp; market price, per product
+              </div>
+            </div>
+          </div>
+          <div id="market-list"></div>
+          <div class="card">
+            <div class="section-title">Log a Price Observation</div>
+            <form class="inline inline-row" id="market-form">
+              <div style="grid-column: span 1">
+                <label>Product</label
+                ><select name="product_id" id="market-product-select"></select>
+              </div>
+              <div>
+                <label>Supplier Name</label
+                ><input
+                  name="supplier_name"
+                  placeholder="e.g. Nakasero Traders"
+                />
+              </div>
+              <div>
+                <label>Supplier Price</label
+                ><input name="supplier_price" type="number" required />
+              </div>
+              <div>
+                <label>Market Price</label
+                ><input name="market_price" type="number" required />
+              </div>
+            </form>
+            <button class="btn" id="market-submit" style="margin-top: 12px">
+              Log Price
+            </button>
+          </div>
+        </div>
+
+        <!-- SALES -->
+        <div id="tab-sales" class="tab hidden">
+          <div class="topbar"><h1>Sales &amp; Invoicing</h1></div>
+          <div class="card">
+            <div class="section-title">Invoices</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Customer</th>
+                  <th>Product</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>Total</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="invoice-list"></tbody>
+            </table>
+          </div>
+          <div class="card" style="margin-top: 16px">
+            <div class="section-title">New Invoice</div>
+            <form class="inline inline-row" id="invoice-form">
+              <div>
+                <label>Customer</label
+                ><select
+                  name="customer_id"
+                  id="invoice-customer-select"
+                ></select>
+              </div>
+              <div>
+                <label>Or enter customer name or ID</label
+                ><input
+                  name="customer_text"
+                  id="invoice-customer-text"
+                  placeholder="New customer name or numeric id"
+                />
+              </div>
+              <div>
+                <label>Product</label
+                ><select name="product_id" id="invoice-product-select"></select>
+              </div>
+              <div>
+                <label>Qty</label
+                ><input name="qty" type="number" value="1" required />
+              </div>
+              <div>
+                <label>Unit price (optional)</label
+                ><input
+                  name="unit_price"
+                  type="number"
+                  step="0.01"
+                  placeholder="Leave blank to use product price"
+                />
+              </div>
+              <div>
+                <label>Status</label
+                ><select name="status">
+                  <option value="unpaid">Unpaid</option>
+                  <option value="paid">Paid</option>
+                </select>
+              </div>
+            </form>
+            <button class="btn" id="invoice-submit" style="margin-top: 12px">
+              Create Invoice
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <div id="business-context-menu" class="context-menu hidden" role="menu">
+      <button type="button" data-action="rename">Rename business</button>
+      <button type="button" data-action="delete" class="danger">
+        Delete business
+      </button>
+    </div>
+    <div
+      id="rename-business-dialog"
+      class="dialog-backdrop hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="rename-business-title"
+    >
+      <form id="rename-business-form" class="dialog-card">
+        <h2 id="rename-business-title">Rename business</h2>
+        <label for="rename-business-name">Business name</label>
+        <input id="rename-business-name" name="name" required />
+        <div class="dialog-actions">
+          <button
+            type="button"
+            id="rename-business-cancel"
+            class="btn secondary"
+          >
+            Cancel</button
+          ><button type="submit" class="btn">Save name</button>
+        </div>
+      </form>
+    </div>
+    <script src="static/app.js?v=9" defer></script>
+  </body>
+</html>
