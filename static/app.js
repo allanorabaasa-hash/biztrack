@@ -4,8 +4,12 @@ let currentBusinessId = "";
 let businesses = [];
 let contextBusinessId = "";
 const supabaseConfig = window.BIZTRACK_SUPABASE_CONFIG || {};
-const supabase =
-  supabaseConfig.url && supabaseConfig.anonKey && window.supabase?.createClient
+const hasSupabaseConfig =
+  /^https:\/\/[^/]+\.supabase\.co$/.test(supabaseConfig.url || "") &&
+  Boolean(supabaseConfig.anonKey) &&
+  !supabaseConfig.anonKey.includes("YOUR_");
+const supabaseClient =
+  hasSupabaseConfig && window.supabase?.createClient
     ? window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey)
     : null;
 let activeUser = null;
@@ -60,8 +64,9 @@ const encryptStore = async (store) => {
   });
 };
 const readStore = async () => {
-  if (!supabase || !activeUser) throw new Error("Your session has expired.");
-  const { data: workspace, error } = await supabase
+  if (!supabaseClient || !activeUser)
+    throw new Error("Your session has expired.");
+  const { data: workspace, error } = await supabaseClient
     .from("biztrack_workspaces")
     .select("encrypted_data")
     .eq("user_id", activeUser.id)
@@ -84,8 +89,9 @@ const readStore = async () => {
   }
 };
 const writeStore = async (store) => {
-  if (!supabase || !activeUser) throw new Error("Your session has expired.");
-  const { error } = await supabase.from("biztrack_workspaces").upsert(
+  if (!supabaseClient || !activeUser)
+    throw new Error("Your session has expired.");
+  const { error } = await supabaseClient.from("biztrack_workspaces").upsert(
     {
       user_id: activeUser.id,
       salt: activeUser.salt,
@@ -95,6 +101,19 @@ const writeStore = async (store) => {
     { onConflict: "user_id" },
   );
   if (error) throw new Error("Your workspace could not be saved.");
+};
+const saveProfile = async ({ id, email, name }) => {
+  if (!supabaseClient) throw new Error("Supabase is not configured.");
+  const { error } = await supabaseClient.from("biztrack_profiles").upsert(
+    {
+      user_id: id,
+      email,
+      name: String(name || "").trim(),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" },
+  );
+  if (error) throw error;
 };
 const nextId = (rows) =>
   Math.max(0, ...rows.map((row) => Number(row.id) || 0)) + 1;
@@ -782,6 +801,15 @@ const beginSession = async (account, key) => {
   document.getElementById("auth-screen").classList.add("hidden");
   await loadBusinesses();
 };
+const showAuthError = (error, fallback) => {
+  if (error?.message === "Supabase is not configured.") {
+    authMessage(
+      "Supabase is not configured. Add your project URL and anon key in static/supabase-config.js.",
+    );
+    return;
+  }
+  authMessage(error?.message || fallback);
+};
 document
   .getElementById("show-signup")
   .addEventListener("click", () => showAuthPanel(true));
@@ -812,24 +840,33 @@ document
         "Use a valid email and a password with at least 10 characters.",
       );
     try {
-      if (!supabase) throw new Error("Supabase is not configured.");
+      if (!supabaseClient) throw new Error("Supabase is not configured.");
       const salt = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
       const { key } = await deriveKey(password, salt);
-      const { data, error } = await supabase.auth.signUp({
+      const { data, error } = await supabaseClient.auth.signUp({
         email,
         password,
-        options: { data: { name: String(values.name).trim(), salt } },
+        options: {
+          emailRedirectTo: `${window.location.origin}/`,
+          data: { name: String(values.name).trim(), salt },
+        },
       });
       if (error) throw error;
       if (!data.user || !data.session)
         return authMessage(
-          "Check your email to confirm your account, then log in.",
+          "Account created, but email confirmation is enabled. Disable Confirm email in Supabase Authentication settings, then create the account again.",
         );
       const account = { id: data.user.id, email, salt };
+      await saveProfile({
+        id: data.user.id,
+        email,
+        name: values.name,
+      });
       await beginSession(account, key);
       await writeStore(emptyStore());
-    } catch {
-      authMessage("Could not create your account. Check your Supabase setup.");
+      showToast("Account created successfully. You can now use BizTrack.");
+    } catch (error) {
+      showAuthError(error, "Could not create your account.");
     }
   });
 document
@@ -838,14 +875,14 @@ document
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.currentTarget));
     try {
-      if (!supabase) throw new Error("Supabase is not configured.");
-      const { data, error } = await supabase.auth.signInWithPassword({
+      if (!supabaseClient) throw new Error("Supabase is not configured.");
+      const { data, error } = await supabaseClient.auth.signInWithPassword({
         email: String(values.email).trim().toLowerCase(),
         password: String(values.password),
       });
-      if (error || !data.user)
-        return authMessage("Incorrect email or password.");
-      const { data: workspace, error: workspaceError } = await supabase
+      if (error) throw error;
+      if (!data.user) throw new Error("Your account could not be found.");
+      const { data: workspace, error: workspaceError } = await supabaseClient
         .from("biztrack_workspaces")
         .select("salt")
         .eq("user_id", data.user.id)
@@ -859,10 +896,16 @@ document
         email: data.user.email,
         salt,
       };
+      await saveProfile({
+        id: data.user.id,
+        email: data.user.email,
+        name: data.user.user_metadata?.name,
+      });
       await beginSession(account, key);
       if (!workspace) await writeStore(emptyStore());
-    } catch {
-      authMessage(
+    } catch (error) {
+      showAuthError(
+        error,
         "Incorrect email or password, or private data could not be unlocked.",
       );
     }
