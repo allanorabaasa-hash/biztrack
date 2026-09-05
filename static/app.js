@@ -772,6 +772,18 @@ document
 document
   .getElementById("show-login")
   .addEventListener("click", () => showAuthPanel(false));
+document.querySelectorAll("[data-password-toggle]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const input = button.previousElementSibling;
+    const isVisible = input.type === "text";
+    input.type = isVisible ? "password" : "text";
+    button.textContent = isVisible ? "Show" : "Hide";
+    button.setAttribute(
+      "aria-label",
+      isVisible ? "Show password" : "Hide password",
+    );
+  });
+});
 document
   .getElementById("signup-form")
   .addEventListener("submit", async (event) => {

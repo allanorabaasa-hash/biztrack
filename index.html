@@ -12,7 +12,7 @@
         <div class="brand auth-brand"><span>BizTrack</span></div>
         <div id="login-panel">
           <h1>Welcome back</h1>
-          <p>Sign in to your private offline workspace.</p>
+          <p>Sign in to your BizTrack workspace.</p>
           <form id="login-form" class="inline">
             <div>
               <label>Email</label
@@ -24,13 +24,23 @@
               />
             </div>
             <div>
-              <label>Password</label
-              ><input
-                name="password"
-                type="password"
-                autocomplete="current-password"
-                required
-              />
+              <label>Password</label>
+              <div class="password-field">
+                <input
+                  name="password"
+                  type="password"
+                  autocomplete="current-password"
+                  required
+                />
+                <button
+                  class="password-toggle"
+                  type="button"
+                  data-password-toggle
+                  aria-label="Show password"
+                >
+                  Show
+                </button>
+              </div>
             </div>
             <button class="btn" type="submit">Log in</button>
           </form>
@@ -40,7 +50,7 @@
         </div>
         <div id="signup-panel" class="hidden">
           <h1>Create account</h1>
-          <p>Your data is encrypted locally with your password.</p>
+          <p>Your data is encrypted with your password.</p>
           <form id="signup-form" class="inline">
             <div>
               <label>Name</label
@@ -56,14 +66,24 @@
               />
             </div>
             <div>
-              <label>Password</label
-              ><input
-                name="password"
-                type="password"
-                minlength="10"
-                autocomplete="new-password"
-                required
-              />
+              <label>Password</label>
+              <div class="password-field">
+                <input
+                  name="password"
+                  type="password"
+                  minlength="10"
+                  autocomplete="new-password"
+                  required
+                />
+                <button
+                  class="password-toggle"
+                  type="button"
+                  data-password-toggle
+                  aria-label="Show password"
+                >
+                  Show
+                </button>
+              </div>
             </div>
             <button class="btn" type="submit">Create account</button>
           </form>
