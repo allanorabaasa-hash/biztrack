@@ -3,9 +3,11 @@ const uiText = (value) => value;
 let currentBusinessId = "";
 let businesses = [];
 let contextBusinessId = "";
-// Browser-only encrypted data store. No HTTP requests or server APIs are used.
-const ACCOUNTS_KEY = "biztrack-offline-accounts-v1";
-const STORE_PREFIX = "biztrack-offline-data-v2-";
+const supabaseConfig = window.BIZTRACK_SUPABASE_CONFIG || {};
+const supabase =
+  supabaseConfig.url && supabaseConfig.anonKey && window.supabase?.createClient
+    ? window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey)
+    : null;
 let activeUser = null;
 const emptyStore = () => ({
   businesses: [],
@@ -58,10 +60,16 @@ const encryptStore = async (store) => {
   });
 };
 const readStore = async () => {
-  const raw = localStorage.getItem(STORE_PREFIX + activeUser.id);
-  if (!raw) return emptyStore();
+  if (!supabase || !activeUser) throw new Error("Your session has expired.");
+  const { data: workspace, error } = await supabase
+    .from("biztrack_workspaces")
+    .select("encrypted_data")
+    .eq("user_id", activeUser.id)
+    .maybeSingle();
+  if (error) throw new Error("Your workspace could not be loaded.");
+  if (!workspace?.encrypted_data) return emptyStore();
   try {
-    const payload = JSON.parse(raw);
+    const payload = JSON.parse(workspace.encrypted_data);
     const decrypted = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: base64ToBytes(payload.iv) },
       activeUser.key,
@@ -75,8 +83,19 @@ const readStore = async () => {
     throw new Error("Your private data could not be unlocked.");
   }
 };
-const writeStore = async (store) =>
-  localStorage.setItem(STORE_PREFIX + activeUser.id, await encryptStore(store));
+const writeStore = async (store) => {
+  if (!supabase || !activeUser) throw new Error("Your session has expired.");
+  const { error } = await supabase.from("biztrack_workspaces").upsert(
+    {
+      user_id: activeUser.id,
+      salt: activeUser.salt,
+      encrypted_data: await encryptStore(store),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" },
+  );
+  if (error) throw new Error("Your workspace could not be saved.");
+};
 const nextId = (rows) =>
   Math.max(0, ...rows.map((row) => Number(row.id) || 0)) + 1;
 const requestData = (opts) => (opts?.body ? JSON.parse(opts.body) : {});
@@ -748,9 +767,6 @@ document
     selectBusiness(business.business.id);
     showToast("Business added.");
   });
-const accounts = () => JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
-const saveAccounts = (items) =>
-  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(items));
 const authMessage = (message = "") => {
   document.getElementById("auth-message").textContent = message;
 };
@@ -760,9 +776,9 @@ const showAuthPanel = (signup) => {
   authMessage();
 };
 const beginSession = async (account, key) => {
-  activeUser = { id: account.id, key };
+  activeUser = { id: account.id, key, salt: account.salt };
   currentBusinessId =
-    sessionStorage.getItem(`biztrack-business-${account.id}`) || "";
+    localStorage.getItem(`biztrack-business-${account.id}`) || "";
   document.getElementById("auth-screen").classList.add("hidden");
   await loadBusinesses();
 };
@@ -795,22 +811,25 @@ document
       return authMessage(
         "Use a valid email and a password with at least 10 characters.",
       );
-    if (accounts().some((account) => account.email === email))
-      return authMessage("An account already exists for this email.");
     try {
+      if (!supabase) throw new Error("Supabase is not configured.");
       const salt = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
-      const { key, verifier } = await deriveKey(password, salt);
-      const account = {
-        id: crypto.randomUUID(),
-        name: String(values.name).trim(),
+      const { key } = await deriveKey(password, salt);
+      const { data, error } = await supabase.auth.signUp({
         email,
-        salt,
-        verifier,
-      };
-      saveAccounts([...accounts(), account]);
+        password,
+        options: { data: { name: String(values.name).trim(), salt } },
+      });
+      if (error) throw error;
+      if (!data.user || !data.session)
+        return authMessage(
+          "Check your email to confirm your account, then log in.",
+        );
+      const account = { id: data.user.id, email, salt };
       await beginSession(account, key);
+      await writeStore(emptyStore());
     } catch {
-      authMessage("Secure storage is not available in this browser.");
+      authMessage("Could not create your account. Check your Supabase setup.");
     }
   });
 document
@@ -818,18 +837,30 @@ document
   .addEventListener("submit", async (event) => {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.currentTarget));
-    const account = accounts().find(
-      (item) => item.email === String(values.email).trim().toLowerCase(),
-    );
-    if (!account) return authMessage("Incorrect email or password.");
     try {
-      const { key, verifier } = await deriveKey(
-        String(values.password),
-        account.salt,
-      );
-      if (verifier !== account.verifier)
+      if (!supabase) throw new Error("Supabase is not configured.");
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: String(values.email).trim().toLowerCase(),
+        password: String(values.password),
+      });
+      if (error || !data.user)
         return authMessage("Incorrect email or password.");
+      const { data: workspace, error: workspaceError } = await supabase
+        .from("biztrack_workspaces")
+        .select("salt")
+        .eq("user_id", data.user.id)
+        .maybeSingle();
+      if (workspaceError) throw workspaceError;
+      const salt = workspace?.salt || data.user.user_metadata?.salt;
+      if (!salt) throw new Error("Workspace encryption settings are missing.");
+      const { key } = await deriveKey(String(values.password), salt);
+      const account = {
+        id: data.user.id,
+        email: data.user.email,
+        salt,
+      };
       await beginSession(account, key);
+      if (!workspace) await writeStore(emptyStore());
     } catch {
       authMessage(
         "Incorrect email or password, or private data could not be unlocked.",
