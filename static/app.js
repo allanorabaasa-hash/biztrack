@@ -565,7 +565,12 @@ const showToast = (message, isError = false) => {
   showToast.timer = setTimeout(() => (toast.className = "toast"), 3200);
 };
 let activePeriod = "monthly";
-const isoDate = (date) => date.toISOString().slice(0, 10);
+const isoDate = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 const reportQuery = () => {
   const params = new URLSearchParams({ period: activePeriod });
   if (activePeriod === "custom") {

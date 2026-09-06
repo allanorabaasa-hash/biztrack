@@ -280,55 +280,12 @@ h3,
   grid-template-columns: repeat(3, 1fr);
 }
 @media (max-width: 900px) {
+  body {
+    overflow-x: auto;
+  }
   .app {
-    display: block;
-  }
-  .main {
-    padding: 16px 16px 24px;
-  }
-  .grid-4 {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .grid-2,
-  .grid-3 {
-    grid-template-columns: 1fr;
-  }
-  .sidebar {
-    position: relative;
-    width: 100%;
-    padding: 12px;
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    box-shadow: 0 4px 18px rgba(18, 32, 30, 0.12);
-  }
-  .sidebar .brand {
-    flex: 0 0 auto;
-    padding: 4px 8px 8px;
-  }
-  .business-picker {
-    flex: 1 1 180px;
-    padding: 0 0 6px;
-  }
-  .sidebar .nav-item {
-    flex: 1 1 auto;
-    min-width: 112px;
-    padding: 9px 8px;
-    text-align: center;
-    font-size: 12px;
-  }
-  .mobile-menu-btn {
-    display: none;
-  }
-  .topbar {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 14px;
-  }
-  .report-filter {
-    width: 100%;
+    grid-template-columns: 230px minmax(970px, 1fr);
+    min-width: 1200px;
   }
 }
 @media (max-width: 560px) {
