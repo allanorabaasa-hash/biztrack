@@ -124,23 +124,28 @@ const requireBusiness = () => {
 };
 const reportRange = (params) => {
   const period = params.get("period") || "monthly";
-  const end = new Date();
-  end.setHours(24, 0, 0, 0);
-  const start = new Date(end);
-  if (period === "daily") start.setDate(start.getDate() - 1);
-  else if (period === "weekly") start.setDate(start.getDate() - 7);
-  else if (period === "custom") {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  if (period === "daily") end.setDate(end.getDate() + 1);
+  else if (period === "weekly") {
+    start.setDate(start.getDate() - 6);
+    end.setDate(end.getDate() + 1);
+  } else if (period === "custom") {
     const startValue = params.get("start");
     const endValue = params.get("end");
-    const start = new Date(`${startValue}T00:00:00`);
-    const end = new Date(`${endValue}T00:00:00`);
-    end.setDate(end.getDate() + 1);
+    const customStart = new Date(`${startValue}T00:00:00`);
+    const customEnd = new Date(`${endValue}T00:00:00`);
+    customEnd.setDate(customEnd.getDate() + 1);
     return {
-      start,
-      end,
+      start: customStart,
+      end: customEnd,
       label: `Custom dates: ${startValue} to ${endValue}`,
     };
-  } else start.setDate(start.getDate() - 30);
+  } else {
+    start.setDate(start.getDate() - 29);
+    end.setDate(end.getDate() + 1);
+  }
   return {
     start,
     end,
@@ -501,12 +506,6 @@ const api = async (path, opts = {}) => {
     const expenses = transactions
       .filter((row) => row.type === "expense")
       .reduce((sum, row) => sum + Number(row.amount), 0);
-    const byDate = {};
-    transactions.forEach((row) => {
-      const date = row.occurred_at.slice(0, 10);
-      byDate[date] = byDate[date] || { d: date, income: 0, expense: 0 };
-      byDate[date][row.type] += Number(row.amount);
-    });
     const products = scoped(store.products);
     const movements = scoped(store.stockMovements).filter((row) =>
       inRange(row.occurred_at, range),
@@ -549,9 +548,6 @@ const api = async (path, opts = {}) => {
       net_profit_30d: income - expenses,
       revenue_30d: income,
       expenses_30d: expenses,
-      cash_flow_series: Object.values(byDate).sort((a, b) =>
-        a.d.localeCompare(b.d),
-      ),
       low_stock: products.filter((row) => row.stock_qty <= row.reorder_level),
       top_products: top,
       outstanding_invoices: scoped(store.invoices)
@@ -1051,8 +1047,6 @@ async function loadDashboard() {
     `${period} ${uiText("Expenses")}`;
   document.getElementById("d-profit-label").textContent =
     `${period} ${uiText("Net Profit")}`;
-  document.getElementById("cashflow-title").textContent =
-    `${uiText("Cash Flow")} — ${period}`;
   document.getElementById("d-sales").textContent = fmt(d.sales_total);
   document.getElementById("d-sales-units").textContent =
     `${d.sales_units} ${uiText("items invoiced")}`;
@@ -1094,19 +1088,6 @@ async function loadDashboard() {
       )
       .join("") ||
     `<tr><td colspan="3" class="empty">${uiText("No sales yet.")}</td></tr>`;
-
-  const labels = d.cash_flow_series.map((r) => r.d.slice(5));
-  const income = d.cash_flow_series.map((r) => r.income);
-  const expense = d.cash_flow_series.map((r) => r.expense);
-  drawLineChart(
-    document.getElementById("cashflow-chart"),
-    labels,
-    [
-      { values: income, color: "#0b4f4a" },
-      { values: expense, color: "#e4572e" },
-    ],
-    220,
-  );
 }
 
 // ---- Accounting ----
