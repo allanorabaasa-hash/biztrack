@@ -145,7 +145,7 @@ h3,
   font: inherit;
   font-size: 12px;
 }
-#custom-date-range {
+#custom-date-range:not(.hidden) {
   display: grid;
   gap: 7px;
   margin-top: 8px;
@@ -185,7 +185,7 @@ h3,
     width: 100%;
     justify-content: center;
   }
-  .dashboard-period #custom-date-range {
+  .dashboard-period #custom-date-range.hidden {
     display: none;
   }
   .dashboard-period #custom-date-range.mobile-custom-open {
@@ -365,6 +365,13 @@ h3,
   }
   table {
     font-size: 12px;
+    min-width: 0;
+    table-layout: fixed;
+  }
+  th,
+  td {
+    padding: 8px 5px;
+    overflow-wrap: anywhere;
   }
 }
 .card {
@@ -373,6 +380,8 @@ h3,
   border-radius: var(--radius);
   padding: 18px;
   box-shadow: 0 8px 28px rgba(18, 32, 30, 0.045);
+  width: 100%;
+  right: 5%;
 }
 .business-list {
   display: grid;
@@ -652,6 +661,12 @@ canvas {
 .chart-canvas {
   width: 100%;
   display: block;
+  max-height: none;
+}
+@media (max-width: 560px) {
+  table {
+    min-width: 0;
+  }
 }
 .toast {
   position: fixed;

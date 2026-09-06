@@ -129,13 +129,18 @@ const reportRange = (params) => {
   const start = new Date(end);
   if (period === "daily") start.setDate(start.getDate() - 1);
   else if (period === "weekly") start.setDate(start.getDate() - 7);
-  else if (period === "custom")
+  else if (period === "custom") {
+    const startValue = params.get("start");
+    const endValue = params.get("end");
+    const start = new Date(`${startValue}T00:00:00`);
+    const end = new Date(`${endValue}T00:00:00`);
+    end.setDate(end.getDate() + 1);
     return {
-      start: new Date(`${params.get("start")}T00:00:00`),
-      end: new Date(`${params.get("end")}T23:59:59`),
-      label: "Custom period",
+      start,
+      end,
+      label: `Custom dates: ${startValue} to ${endValue}`,
     };
-  else start.setDate(start.getDate() - 30);
+  } else start.setDate(start.getDate() - 30);
   return {
     start,
     end,
@@ -591,6 +596,7 @@ periodSelect.addEventListener("change", () => {
   customRange.classList.toggle("hidden", activePeriod !== "custom");
   customRange.classList.remove("mobile-custom-open");
   if (activePeriod !== "custom") reloadReports();
+  else document.getElementById("report-start").focus();
 });
 customPeriodToggle.addEventListener("click", () => {
   activePeriod = "custom";
