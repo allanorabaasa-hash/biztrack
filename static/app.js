@@ -13,6 +13,7 @@ const supabaseClient =
     ? window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey)
     : null;
 let activeUser = null;
+let activePlan = "";
 const emptyStore = () => ({
   businesses: [],
   products: [],
@@ -114,6 +115,22 @@ const saveProfile = async ({ id, email, name }) => {
     { onConflict: "user_id" },
   );
   if (error) throw error;
+};
+const updateSubscription = async (plan, paymentMethod = null) => {
+  if (!supabaseClient || !activeUser)
+    throw new Error("Your session has expired.");
+  const { error } = await supabaseClient
+    .from("biztrack_profiles")
+    .update({
+      subscription_plan: plan,
+      payment_method: paymentMethod,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", activeUser.id);
+  if (error) throw error;
+  activePlan = plan;
+  document.getElementById("account-plan").textContent =
+    `${plan === "premium" ? "Premium" : "Free"} plan`;
 };
 const nextId = (rows) =>
   Math.max(0, ...rows.map((row) => Number(row.id) || 0)) + 1;
@@ -815,10 +832,20 @@ const showAuthPanel = (signup) => {
 };
 const beginSession = async (account, key) => {
   activeUser = { id: account.id, key, salt: account.salt };
+  activePlan = account.plan || "";
   currentBusinessId =
     localStorage.getItem(`biztrack-business-${account.id}`) || "";
   document.getElementById("auth-screen").classList.add("hidden");
-  await loadBusinesses();
+  if (activePlan) {
+    document.getElementById("plan-screen").classList.add("hidden");
+    document.querySelector(".app").classList.remove("hidden");
+    document.getElementById("account-plan").textContent =
+      `${activePlan === "premium" ? "Premium" : "Free"} plan`;
+    await loadBusinesses();
+  } else {
+    document.querySelector(".app").classList.add("hidden");
+    document.getElementById("plan-screen").classList.remove("hidden");
+  }
 };
 const showAuthError = (error, fallback) => {
   if (error?.message === "Supabase is not configured.") {
@@ -883,7 +910,6 @@ document
       });
       await beginSession(account, key);
       await writeStore(emptyStore());
-      showToast("Account created successfully. You can now use BizTrack.");
     } catch (error) {
       showAuthError(error, "Could not create your account.");
     }
@@ -910,10 +936,17 @@ document
       const salt = workspace?.salt || data.user.user_metadata?.salt;
       if (!salt) throw new Error("Workspace encryption settings are missing.");
       const { key } = await deriveKey(String(values.password), salt);
+      const { data: profile, error: profileError } = await supabaseClient
+        .from("biztrack_profiles")
+        .select("subscription_plan")
+        .eq("user_id", data.user.id)
+        .maybeSingle();
+      if (profileError) throw profileError;
       const account = {
         id: data.user.id,
         email: data.user.email,
         salt,
+        plan: profile?.subscription_plan || "",
       };
       await saveProfile({
         id: data.user.id,
@@ -929,6 +962,62 @@ document
       );
     }
   });
+
+document.querySelectorAll(".plan-choice").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const plan = button.dataset.plan;
+    if (plan === "free") {
+      try {
+        await updateSubscription("free");
+        document.getElementById("plan-screen").classList.add("hidden");
+        document.querySelector(".app").classList.remove("hidden");
+        await loadBusinesses();
+        showToast("Free plan selected. Welcome to BizTrack.");
+      } catch (error) {
+        document.getElementById("plan-message").textContent = error.message;
+      }
+    } else {
+      document.querySelector(".plan-grid").classList.add("hidden");
+      document.getElementById("payment-form").classList.remove("hidden");
+      document.getElementById("plan-message").textContent = "";
+    }
+  });
+});
+document.getElementById("back-to-plans").addEventListener("click", () => {
+  document.querySelector(".plan-grid").classList.remove("hidden");
+  document.getElementById("payment-form").classList.add("hidden");
+});
+document
+  .getElementById("payment-form")
+  .addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const method = new FormData(event.currentTarget).get("payment_method");
+    try {
+      await updateSubscription("premium", method);
+      document.getElementById("plan-screen").classList.add("hidden");
+      document.querySelector(".app").classList.remove("hidden");
+      await loadBusinesses();
+      showToast(
+        `Premium selected with ${method.replace("_", " ")}. Payment setup is ready to connect.`,
+      );
+    } catch (error) {
+      document.getElementById("plan-message").textContent = error.message;
+    }
+  });
+document.getElementById("logout-button").addEventListener("click", async () => {
+  try {
+    if (supabaseClient) await supabaseClient.auth.signOut();
+  } finally {
+    activeUser = null;
+    activePlan = "";
+    currentBusinessId = "";
+    document.querySelector(".app").classList.add("hidden");
+    document.getElementById("plan-screen").classList.add("hidden");
+    document.getElementById("auth-screen").classList.remove("hidden");
+    showAuthPanel(false);
+    showToast("You have been logged out.");
+  }
+});
 
 // Lightweight local chart renderer. It replaces the former CDN dependency
 // while keeping all financial data on this device/server.

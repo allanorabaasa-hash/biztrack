@@ -94,6 +94,88 @@
         <p id="auth-message" class="auth-message" role="status"></p>
       </div>
     </section>
+    <section id="plan-screen" class="plan-screen hidden">
+      <div class="plan-shell">
+        <div class="plan-heading">
+          <div class="brand auth-brand"><span>BizTrack</span></div>
+          <p class="eyebrow">Choose your access</p>
+          <h1>Pick a plan for your workspace</h1>
+          <p>
+            Start free with every BizTrack feature, or choose Premium for
+            ongoing support.
+          </p>
+        </div>
+        <div class="plan-grid">
+          <article class="plan-card" data-plan-card="free">
+            <div class="plan-card-head">
+              <h2>Free</h2>
+              <span class="plan-tag">Full access</span>
+            </div>
+            <div class="plan-price">UGX 0 <small>forever</small></div>
+            <p>Everything you need to run and understand your businesses.</p>
+            <ul>
+              <li>All BizTrack features</li>
+              <li>Encrypted workspace</li>
+              <li>No monthly charge</li>
+            </ul>
+            <button class="btn plan-choice" type="button" data-plan="free">
+              Continue with Free
+            </button>
+          </article>
+          <article class="plan-card premium" data-plan-card="premium">
+            <div class="plan-card-head">
+              <h2>Premium</h2>
+              <span class="plan-tag">Monthly</span>
+            </div>
+            <div class="plan-price">
+              UGX 5,000 <small>≈ $1.39 / month</small>
+            </div>
+            <p>
+              Keep full access while supporting the continued growth of
+              BizTrack.
+            </p>
+            <ul>
+              <li>Everything in Free</li>
+              <li>Priority product updates</li>
+              <li>Cancel anytime</li>
+            </ul>
+            <button class="btn plan-choice" type="button" data-plan="premium">
+              Choose Premium
+            </button>
+          </article>
+        </div>
+        <form id="payment-form" class="payment-panel hidden">
+          <div>
+            <h2>Choose a payment method</h2>
+            <p>Premium is UGX 5,000, approximately $1.39 monthly.</p>
+          </div>
+          <div class="payment-options">
+            <label
+              ><input
+                type="radio"
+                name="payment_method"
+                value="mobile_money"
+                required
+              />
+              Mobile money</label
+            >
+            <label
+              ><input type="radio" name="payment_method" value="card" /> Card
+              payment</label
+            >
+            <label
+              ><input type="radio" name="payment_method" value="crypto" />
+              Crypto</label
+            >
+          </div>
+          <button class="btn" type="submit">Continue to payment</button>
+          <button id="back-to-plans" class="text-button" type="button">
+            Back to plans
+          </button>
+        </form>
+        <p id="plan-message" class="auth-message" role="status"></p>
+      </div>
+    </section>
     <div class="app">
       <button class="mobile-menu-btn" type="button" aria-label="Toggle menu">
         ☰ Menu
@@ -113,6 +195,12 @@
         <div class="nav-item" data-tab="market">Market Intelligence</div>
         <div class="nav-item" data-tab="sales">Sales</div>
         <div class="nav-item" data-tab="overall">Overall Profit &amp; Loss</div>
+        <div class="sidebar-footer">
+          <div id="account-plan" class="account-plan"></div>
+          <button id="logout-button" class="logout-button" type="button">
+            Log out
+          </button>
+        </div>
       </div>
       <div class="main">
         <div id="tab-businesses" class="tab">
