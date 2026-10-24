@@ -604,6 +604,7 @@ const updateSubscription = async (plan, paymentMethod = null) => {
   if (!activeUser) throw new Error("Unlock your workspace to continue.");
   activePlan = plan;
   const local = await localWorkspace(activeUser.id);
+  let planSynced = false;
   await saveLocalWorkspace({
     ...(local || {}),
     user_id: activeUser.id,
@@ -611,7 +612,7 @@ const updateSubscription = async (plan, paymentMethod = null) => {
     salt: activeUser.salt,
     cachedKey: activeUser.key,
     plan,
-    planUnsynced: !navigator.onLine,
+    planUnsynced: true,
   });
   if (navigator.onLine && supabaseClient) {
     const { error } = await supabaseClient
@@ -623,7 +624,14 @@ const updateSubscription = async (plan, paymentMethod = null) => {
       })
       .eq("user_id", activeUser.id);
     if (error) console.warn("Plan update will need an online retry:", error);
+    else planSynced = true;
   }
+  if (planSynced)
+    await saveLocalWorkspace({
+      ...(await localWorkspace(activeUser.id)),
+      plan,
+      planUnsynced: false,
+    });
   const planName = PLAN_CONFIG[plan]?.name || "Basic";
   document.getElementById("account-plan").textContent = planName;
 };
