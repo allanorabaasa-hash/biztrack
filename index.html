@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BizTrack</title>
-    <link rel="stylesheet" href="static/app.css?v=4" />
+    <link rel="stylesheet" href="static/app.css?v=5" />
   </head>
   <body>
     <section id="auth-screen" class="auth-screen">
@@ -155,10 +155,31 @@
       </div>
     </section>
     <div class="app">
-      <button class="mobile-menu-btn" type="button" aria-label="Toggle menu">
-        ☰ Menu
-      </button>
-      <div class="sidebar">
+      <header class="mobile-header">
+        <button
+          class="mobile-menu-btn"
+          type="button"
+          aria-label="Open menu"
+          aria-expanded="false"
+          aria-controls="app-sidebar"
+        >
+          <span class="menu-icon" aria-hidden="true"><i></i></span>
+        </button>
+        <span class="mobile-brand">Biz<span>Track</span></span>
+        <span class="mobile-page-title" id="mobile-page-title">Businesses</span>
+      </header>
+      <button
+        class="drawer-backdrop"
+        type="button"
+        aria-label="Close menu"
+        tabindex="-1"
+      ></button>
+      <nav
+        class="sidebar"
+        id="app-sidebar"
+        aria-label="Main navigation"
+        tabindex="-1"
+      >
         <div class="brand">Biz<span>Track</span></div>
         <div class="business-picker">
           <label for="business-select">Current business</label>
@@ -166,13 +187,23 @@
             <option value="">Select a business</option>
           </select>
         </div>
-        <div class="nav-item active" data-tab="businesses">Businesses</div>
-        <div class="nav-item" data-tab="dashboard">Dashboard</div>
-        <div class="nav-item" data-tab="accounting">Accounting</div>
-        <div class="nav-item" data-tab="inventory">Inventory</div>
-        <div class="nav-item" data-tab="sales">Sales</div>
-        <div class="nav-item" data-tab="overall">Overall Profit &amp; Loss</div>
-        <div class="nav-item" data-tab="news">News</div>
+        <button class="nav-item active" type="button" data-tab="businesses">
+          Businesses
+        </button>
+        <button class="nav-item" type="button" data-tab="dashboard">
+          Dashboard
+        </button>
+        <button class="nav-item" type="button" data-tab="accounting">
+          Accounting
+        </button>
+        <button class="nav-item" type="button" data-tab="inventory">
+          Inventory
+        </button>
+        <button class="nav-item" type="button" data-tab="sales">Sales</button>
+        <button class="nav-item" type="button" data-tab="overall">
+          Overall Profit &amp; Loss
+        </button>
+        <button class="nav-item" type="button" data-tab="news">News</button>
         <div class="sidebar-footer">
           <div id="account-plan" class="account-plan"></div>
           <a href="#" id="change-plan-link" class="text-button">Change plan</a>
@@ -180,7 +211,7 @@
             Log out
           </button>
         </div>
-      </div>
+      </nav>
       <div class="main">
         <div id="tab-businesses" class="tab">
           <div class="topbar">
@@ -242,17 +273,19 @@
           </div>
           <div class="card">
             <div class="section-title">Profit &amp; loss by business</div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Business</th>
-                  <th style="text-align: right">Income</th>
-                  <th style="text-align: right">Expenses</th>
-                  <th style="text-align: right">Net profit / loss</th>
-                </tr>
-              </thead>
-              <tbody id="overall-businesses"></tbody>
-            </table>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Business</th>
+                    <th style="text-align: right">Income</th>
+                    <th style="text-align: right">Expenses</th>
+                    <th style="text-align: right">Net profit / loss</th>
+                  </tr>
+                </thead>
+                <tbody id="overall-businesses"></tbody>
+              </table>
+            </div>
           </div>
         </div>
         <div id="tab-news" class="tab hidden">
@@ -351,16 +384,18 @@
           </div>
           <div class="card" style="margin-top: 16px">
             <div class="section-title">Top Selling Products</div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>Qty Sold</th>
-                  <th>Revenue</th>
-                </tr>
-              </thead>
-              <tbody id="d-top-products"></tbody>
-            </table>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Qty Sold</th>
+                    <th>Revenue</th>
+                  </tr>
+                </thead>
+                <tbody id="d-top-products"></tbody>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -421,7 +456,7 @@
             </div>
             <div class="card">
               <div class="section-title" id="pl-title">Profit &amp; Loss</div>
-              <table>
+              <table class="compact-table">
                 <thead>
                   <tr>
                     <th>Income</th>
@@ -430,7 +465,7 @@
                 </thead>
                 <tbody id="pl-income"></tbody>
               </table>
-              <table style="margin-top: 10px">
+              <table class="compact-table" style="margin-top: 10px">
                 <thead>
                   <tr>
                     <th>Expenses</th>
@@ -455,18 +490,20 @@
           </div>
           <div class="card" style="margin-top: 16px">
             <div class="section-title">Recent Transactions</div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Type</th>
-                  <th>Category</th>
-                  <th>Description</th>
-                  <th style="text-align: right">Amount</th>
-                </tr>
-              </thead>
-              <tbody id="txn-list"></tbody>
-            </table>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th>Category</th>
+                    <th>Description</th>
+                    <th style="text-align: right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody id="txn-list"></tbody>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -475,20 +512,22 @@
           <div class="topbar"><h1>Inventory</h1></div>
           <div class="card">
             <div class="section-title">Products</div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>Category</th>
-                  <th>Stock</th>
-                  <th>Reorder Level</th>
-                  <th>Cost Price</th>
-                  <th>Sell Price</th>
-                  <th>Adjust</th>
-                </tr>
-              </thead>
-              <tbody id="inv-list"></tbody>
-            </table>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Category</th>
+                    <th>Stock</th>
+                    <th>Reorder Level</th>
+                    <th>Cost Price</th>
+                    <th>Sell Price</th>
+                    <th>Adjust</th>
+                  </tr>
+                </thead>
+                <tbody id="inv-list"></tbody>
+              </table>
+            </div>
           </div>
           <div class="card" style="margin-top: 16px">
             <div class="section-title">Add Product</div>
@@ -595,21 +634,23 @@
           <div class="topbar"><h1>Sales &amp; Invoicing</h1></div>
           <div class="card">
             <div class="section-title">Invoices</div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Customer</th>
-                  <th>Product</th>
-                  <th>Qty</th>
-                  <th>Price</th>
-                  <th>Total</th>
-                  <th>Status</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="invoice-list"></tbody>
-            </table>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Customer</th>
+                    <th>Product</th>
+                    <th>Qty</th>
+                    <th>Price</th>
+                    <th>Total</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="invoice-list"></tbody>
+              </table>
+            </div>
           </div>
           <div class="card" style="margin-top: 16px">
             <div class="section-title">New Invoice</div>
@@ -710,6 +751,6 @@
       defer
     ></script>
     <script src="static/supabase-config.js" defer></script>
-    <script src="static/app.js?v=15" defer></script>
+    <script src="static/app.js?v=16" defer></script>
   </body>
 </html>
