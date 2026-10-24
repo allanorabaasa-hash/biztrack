@@ -2,6 +2,8 @@ create table if not exists public.biztrack_workspaces (
   user_id uuid primary key references auth.users(id) on delete cascade,
   salt text not null,
   encrypted_data text not null,
+  data_key_wrapped text,
+  recovery_key_wrapped text,
   updated_at timestamptz not null default now()
 );
 
@@ -18,6 +20,10 @@ create table if not exists public.biztrack_profiles (
 alter table public.biztrack_profiles
   add column if not exists subscription_plan text,
   add column if not exists payment_method text;
+
+alter table public.biztrack_workspaces
+  add column if not exists data_key_wrapped text,
+  add column if not exists recovery_key_wrapped text;
 
 alter table public.biztrack_workspaces enable row level security;
 alter table public.biztrack_profiles enable row level security;

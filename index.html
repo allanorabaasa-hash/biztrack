@@ -100,79 +100,57 @@
           <div class="brand auth-brand"><span>BizTrack</span></div>
           <p class="eyebrow">Choose your access</p>
           <h1>Pick a plan for your workspace</h1>
-          <p>
-            Start free with every BizTrack feature, or choose Premium for
-            ongoing support.
-          </p>
+          <p>Start with a monthly plan and unlock the features you need.</p>
         </div>
         <div class="plan-grid">
-          <article class="plan-card" data-plan-card="free">
+          <article class="plan-card" data-plan-card="basic">
             <div class="plan-card-head">
-              <h2>Free</h2>
-              <span class="plan-tag">Full access</span>
+              <h2>BizTrack Basic</h2>
+              <span class="plan-tag">UGX 5,000 / month</span>
             </div>
-            <div class="plan-price">UGX 0 <small>forever</small></div>
-            <p>Everything you need to run and understand your businesses.</p>
+            <div class="plan-price">UGX 5,000 <small>/ month</small></div>
             <ul>
-              <li>All BizTrack features</li>
-              <li>Encrypted workspace</li>
-              <li>No monthly charge</li>
+              <li>Businesses</li>
+              <li>Dashboard (accounting figures only)</li>
+              <li>Accounting</li>
+              <li>Overall Profit &amp; Loss</li>
             </ul>
-            <button class="btn plan-choice" type="button" data-plan="free">
-              Continue with Free
+            <button class="btn plan-choice" type="button" data-plan="basic">
+              Try for free
+            </button>
+          </article>
+          <article class="plan-card" data-plan-card="pro">
+            <div class="plan-card-head">
+              <h2>BizTrack Pro</h2>
+              <span class="plan-tag">UGX 7,500 / month</span>
+            </div>
+            <div class="plan-price">UGX 7,500 <small>/ month</small></div>
+            <ul>
+              <li>Everything in Basic</li>
+              <li>Sales &amp; Invoicing</li>
+              <li>Inventory</li>
+              <li>Dashboard sales and inventory widgets</li>
+            </ul>
+            <button class="btn plan-choice" type="button" data-plan="pro">
+              Try for free
             </button>
           </article>
           <article class="plan-card premium" data-plan-card="premium">
             <div class="plan-card-head">
-              <h2>Premium</h2>
-              <span class="plan-tag">Monthly</span>
+              <h2>BizTrack Premium</h2>
+              <span class="plan-tag">UGX 12,000 / month</span>
             </div>
-            <div class="plan-price">
-              UGX 5,000 <small>≈ $1.39 / month</small>
-            </div>
-            <p>
-              Keep full access while supporting the continued growth of
-              BizTrack.
-            </p>
+            <div class="plan-price">UGX 12,000 <small>/ month</small></div>
             <ul>
-              <li>Everything in Free</li>
-              <li>Priority product updates</li>
-              <li>Cancel anytime</li>
+              <li>Everything in Pro</li>
+              <li>News section</li>
+              <li>All other existing features</li>
             </ul>
             <button class="btn plan-choice" type="button" data-plan="premium">
-              Choose Premium
+              Try for free
             </button>
           </article>
         </div>
-        <form id="payment-form" class="payment-panel hidden">
-          <div>
-            <h2>Choose a payment method</h2>
-            <p>Premium is UGX 5,000, approximately $1.39 monthly.</p>
-          </div>
-          <div class="payment-options">
-            <label
-              ><input
-                type="radio"
-                name="payment_method"
-                value="mobile_money"
-                required
-              />
-              Mobile money</label
-            >
-            <label
-              ><input type="radio" name="payment_method" value="card" /> Card
-              payment</label
-            >
-            <label
-              ><input type="radio" name="payment_method" value="crypto" />
-              Crypto</label
-            >
-          </div>
-          <button class="btn" type="submit">Continue to payment</button>
-          <button id="back-to-plans" class="text-button" type="button">
-            Back to plans
-          </button>
-        </form>
         <p id="plan-message" class="auth-message" role="status"></p>
       </div>
     </section>
@@ -192,11 +170,12 @@
         <div class="nav-item" data-tab="dashboard">Dashboard</div>
         <div class="nav-item" data-tab="accounting">Accounting</div>
         <div class="nav-item" data-tab="inventory">Inventory</div>
-        <div class="nav-item" data-tab="market">Market Intelligence</div>
         <div class="nav-item" data-tab="sales">Sales</div>
         <div class="nav-item" data-tab="overall">Overall Profit &amp; Loss</div>
+        <div class="nav-item" data-tab="news">News</div>
         <div class="sidebar-footer">
           <div id="account-plan" class="account-plan"></div>
+          <a href="#" id="change-plan-link" class="text-button">Change plan</a>
           <button id="logout-button" class="logout-button" type="button">
             Log out
           </button>
@@ -275,6 +254,23 @@
               <tbody id="overall-businesses"></tbody>
             </table>
           </div>
+        </div>
+        <div id="tab-news" class="tab hidden">
+          <div class="topbar">
+            <div>
+              <h1>News</h1>
+              <div class="sub">
+                Current economic and business news for Uganda and East Africa.
+              </div>
+            </div>
+            <button class="btn small" id="news-refresh" type="button">
+              Refresh
+            </button>
+          </div>
+          <div id="news-lock-panel" class="card hidden">
+            Available on Premium — Try for free
+          </div>
+          <div id="news-list" class="news-list"></div>
         </div>
         <!-- DASHBOARD -->
         <div id="tab-dashboard" class="tab hidden">
@@ -404,6 +400,10 @@
                   ><input name="description" placeholder="Optional" />
                 </div>
                 <div>
+                  <label>Date</label
+                  ><input name="occurred_at" type="date" required />
+                </div>
+                <div>
                   <label>Amount (UGX)</label
                   ><input
                     name="amount"
@@ -502,19 +502,46 @@
               <div></div>
               <div>
                 <label>Stock Qty</label
-                ><input name="stock_qty" type="number" value="0" />
+                ><input
+                  name="stock_qty"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value="0"
+                  required
+                />
               </div>
               <div>
                 <label>Reorder Level</label
-                ><input name="reorder_level" type="number" value="0" />
+                ><input
+                  name="reorder_level"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value="0"
+                />
               </div>
               <div>
                 <label>Cost Price</label
-                ><input name="cost_price" type="number" value="0" />
+                ><input
+                  name="cost_price"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value="0"
+                  required
+                />
               </div>
               <div>
                 <label>Sell Price</label
-                ><input name="sell_price" type="number" value="0" />
+                ><input
+                  name="sell_price"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value="0"
+                  required
+                />
               </div>
             </form>
             <button class="btn" id="product-submit" style="margin-top: 12px">
@@ -589,34 +616,47 @@
             <form class="inline inline-row" id="invoice-form">
               <div>
                 <label>Customer</label
-                ><select
-                  name="customer_id"
-                  id="invoice-customer-select"
-                ></select>
-              </div>
-              <div>
-                <label>Or enter customer name or ID</label
                 ><input
-                  name="customer_text"
+                  name="customer_name"
                   id="invoice-customer-text"
-                  placeholder="New customer name or numeric id"
+                  placeholder="Customer name"
+                  required
                 />
               </div>
               <div>
                 <label>Product</label
-                ><select name="product_id" id="invoice-product-select"></select>
+                ><input
+                  name="product_name"
+                  id="invoice-product-text"
+                  list="inventory-product-names"
+                  placeholder="Product name"
+                  required
+                />
+              </div>
+              <div>
+                <label>Date</label
+                ><input name="occurred_at" type="date" required />
               </div>
               <div>
                 <label>Qty</label
-                ><input name="qty" type="number" value="1" required />
+                ><input
+                  name="qty"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value="1"
+                  required
+                />
               </div>
               <div>
-                <label>Unit price (optional)</label
+                <label>Unit price</label
                 ><input
                   name="unit_price"
                   type="number"
+                  min="0"
                   step="0.01"
-                  placeholder="Leave blank to use product price"
+                  placeholder="0.00"
+                  required
                 />
               </div>
               <div>
@@ -627,6 +667,7 @@
                 </select>
               </div>
             </form>
+            <datalist id="inventory-product-names"></datalist>
             <button class="btn" id="invoice-submit" style="margin-top: 12px">
               Create Invoice
             </button>
@@ -665,10 +706,10 @@
       </form>
     </div>
     <script
-      src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
+      src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.56.0"
       defer
     ></script>
     <script src="static/supabase-config.js" defer></script>
-    <script src="static/app.js?v=10" defer></script>
+    <script src="static/app.js?v=15" defer></script>
   </body>
 </html>

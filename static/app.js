@@ -1,5 +1,69 @@
-const fmt = (n) => "UGX " + Math.round(n).toLocaleString();
+const LOW_STOCK_THRESHOLD = 5;
+const PLAN_CONFIG = {
+  basic: {
+    id: "basic",
+    name: "BizTrack Basic",
+    priceLabel: "UGX 5,000 / month",
+    pages: ["businesses", "dashboard", "accounting", "overall"],
+    includes: [
+      "Businesses",
+      "Dashboard (accounting figures only)",
+      "Accounting",
+      "Overall Profit & Loss",
+    ],
+  },
+  pro: {
+    id: "pro",
+    name: "BizTrack Pro",
+    priceLabel: "UGX 7,500 / month",
+    pages: [
+      "businesses",
+      "dashboard",
+      "accounting",
+      "inventory",
+      "sales",
+      "overall",
+    ],
+    includes: [
+      "Everything in Basic",
+      "Sales & Invoicing",
+      "Inventory",
+      "Dashboard sales/inventory widgets",
+    ],
+  },
+  premium: {
+    id: "premium",
+    name: "BizTrack Premium",
+    priceLabel: "UGX 12,000 / month",
+    pages: [
+      "businesses",
+      "dashboard",
+      "accounting",
+      "inventory",
+      "sales",
+      "overall",
+      "news",
+    ],
+    includes: ["Everything in Pro", "News section", "All existing features"],
+  },
+};
+const fmt = (n) => "UGX " + Math.round(Number(n || 0)).toLocaleString();
 const uiText = (value) => value;
+const escapeHtml = (value = "") =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+const toNumber = (value, fallback = 0) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
+const toFiniteNumber = (value, fallback = 0) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
 let currentBusinessId = "";
 let businesses = [];
 let contextBusinessId = "";
@@ -23,6 +87,18 @@ const emptyStore = () => ({
   stockMovements: [],
   marketPrices: [],
 });
+const getBusinessStorageKey = (accountId) =>
+  accountId ? `biztrack-business-${accountId}` : "biztrack-business-id";
+const formatLocalDate = (value) => {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(date);
+};
 const bytesToBase64 = (bytes) =>
   btoa(String.fromCharCode(...new Uint8Array(bytes)));
 const base64ToBytes = (value) =>
@@ -69,7 +145,7 @@ const readStore = async () => {
     throw new Error("Your session has expired.");
   const { data: workspace, error } = await supabaseClient
     .from("biztrack_workspaces")
-    .select("encrypted_data")
+    .select("encrypted_data, updated_at")
     .eq("user_id", activeUser.id)
     .maybeSingle();
   if (error) throw new Error("Your workspace could not be loaded.");
@@ -81,27 +157,57 @@ const readStore = async () => {
       activeUser.key,
       base64ToBytes(payload.data),
     );
+    const parsed = JSON.parse(new TextDecoder().decode(decrypted));
+    activeUser.workspaceUpdatedAt = workspace.updated_at || null;
     return {
       ...emptyStore(),
-      ...JSON.parse(new TextDecoder().decode(decrypted)),
+      ...parsed,
     };
   } catch {
     throw new Error("Your private data could not be unlocked.");
   }
 };
-const writeStore = async (store) => {
+const writeStore = async (store, options = {}) => {
   if (!supabaseClient || !activeUser)
     throw new Error("Your session has expired.");
-  const { error } = await supabaseClient.from("biztrack_workspaces").upsert(
-    {
-      user_id: activeUser.id,
-      salt: activeUser.salt,
-      encrypted_data: await encryptStore(store),
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "user_id" },
-  );
+  const encryptedData = await encryptStore(store);
+  const payload = {
+    user_id: activeUser.id,
+    salt: activeUser.salt,
+    encrypted_data: encryptedData,
+    updated_at: new Date().toISOString(),
+  };
+  const expectedUpdatedAt =
+    activeUser.workspaceUpdatedAt || options.expectedUpdatedAt;
+  let result;
+  if (expectedUpdatedAt) {
+    result = await supabaseClient
+      .from("biztrack_workspaces")
+      .update(payload)
+      .eq("user_id", activeUser.id)
+      .eq("updated_at", expectedUpdatedAt);
+  } else {
+    result = await supabaseClient
+      .from("biztrack_workspaces")
+      .upsert(payload, { onConflict: "user_id" });
+  }
+  const { error, count } = result || {};
   if (error) throw new Error("Your workspace could not be saved.");
+  if ((typeof count === "number" && count === 0) || (result && !result.data)) {
+    const latest = await supabaseClient
+      .from("biztrack_workspaces")
+      .select("encrypted_data, updated_at")
+      .eq("user_id", activeUser.id)
+      .maybeSingle();
+    if (latest?.data) {
+      activeUser.workspaceUpdatedAt = latest.data.updated_at;
+      throw new Error(
+        "Your data was changed on another device — reloaded the latest version.",
+      );
+    }
+    throw new Error("Your workspace could not be saved.");
+  }
+  activeUser.workspaceUpdatedAt = payload.updated_at;
 };
 const saveProfile = async ({ id, email, name }) => {
   if (!supabaseClient) throw new Error("Supabase is not configured.");
@@ -129,8 +235,20 @@ const updateSubscription = async (plan, paymentMethod = null) => {
     .eq("user_id", activeUser.id);
   if (error) throw error;
   activePlan = plan;
-  document.getElementById("account-plan").textContent =
-    `${plan === "premium" ? "Premium" : "Free"} plan`;
+  const planName = PLAN_CONFIG[plan]?.name || "Basic";
+  document.getElementById("account-plan").textContent = planName;
+};
+const planAllowed = (page) => {
+  const plan = activePlan || "basic";
+  const current = PLAN_CONFIG[plan]?.pages || PLAN_CONFIG.basic.pages;
+  return current.includes(page);
+};
+const ensurePlanAccess = (tab) => {
+  if (tab === "news" && !planAllowed("news")) return false;
+  if (tab === "sales" && !planAllowed("sales")) return false;
+  if (tab === "inventory" && !planAllowed("inventory")) return false;
+  if (tab === "dashboard" && !planAllowed("dashboard")) return false;
+  return true;
 };
 const nextId = (rows) =>
   Math.max(0, ...rows.map((row) => Number(row.id) || 0)) + 1;
@@ -287,16 +405,22 @@ const api = async (path, opts = {}) => {
   if (route === "/transactions") {
     if (method === "POST") {
       const amount = Number(data.amount);
-      if (!data.category || !Number.isFinite(amount) || amount <= 0)
+      const category = String(data.category || "").trim();
+      if (!category || !Number.isFinite(amount) || amount <= 0)
         throw new Error("Add a category and an amount greater than zero.");
+      const dateValue = data.occurred_at
+        ? new Date(`${data.occurred_at}T12:00:00`)
+        : new Date();
       const transaction = {
         id: nextId(store.transactions),
         business_id: id,
         type: data.type,
-        category: String(data.category),
-        description: String(data.description || ""),
+        category,
+        description: String(data.description || "").trim(),
         amount,
-        occurred_at: new Date().toISOString(),
+        occurred_at: Number.isNaN(dateValue.getTime())
+          ? new Date().toISOString()
+          : dateValue.toISOString(),
       };
       store.transactions.push(transaction);
       await save();
@@ -335,18 +459,34 @@ const api = async (path, opts = {}) => {
   }
   if (route === "/products") {
     if (method === "POST") {
+      const name = String(data.name || "").trim();
+      const stockQty = Number(data.stock_qty);
+      const costPrice = Number(data.cost_price);
+      const sellPrice = Number(data.sell_price);
+      if (!name) throw new Error("Product name is required.");
+      if (!Number.isFinite(stockQty) || stockQty < 0)
+        throw new Error(
+          "Stock quantity must be a valid number greater than or equal to zero.",
+        );
+      if (!Number.isFinite(costPrice) || costPrice < 0)
+        throw new Error(
+          "Cost price must be a valid number greater than or equal to zero.",
+        );
+      if (!Number.isFinite(sellPrice) || sellPrice < 0)
+        throw new Error(
+          "Sell price must be a valid number greater than or equal to zero.",
+        );
       const product = {
         id: nextId(store.products),
         business_id: id,
-        name: String(data.name || "").trim(),
-        category: String(data.category || ""),
-        unit: String(data.unit || "unit"),
-        stock_qty: Number(data.stock_qty || 0),
-        reorder_level: Number(data.reorder_level || 0),
-        cost_price: Number(data.cost_price || 0),
-        sell_price: Number(data.sell_price || 0),
+        name,
+        category: String(data.category || "").trim(),
+        unit: String(data.unit || "unit").trim() || "unit",
+        stock_qty: stockQty,
+        reorder_level: toNumber(data.reorder_level, 0),
+        cost_price: costPrice,
+        sell_price: sellPrice,
       };
-      if (!product.name) throw new Error("Product name is required.");
       store.products.push(product);
       if (product.stock_qty)
         store.stockMovements.push({
@@ -368,7 +508,12 @@ const api = async (path, opts = {}) => {
     );
     if (!product) throw new Error("Product not found.");
     const delta = Number(data.delta);
-    product.stock_qty += delta;
+    if (!Number.isFinite(delta) || delta === 0)
+      throw new Error("Stock adjustment must be a non-zero number.");
+    const nextStock = Number(product.stock_qty) + delta;
+    if (!Number.isFinite(nextStock))
+      throw new Error("Stock adjustment would create an invalid stock value.");
+    product.stock_qty = nextStock;
     store.stockMovements.push({
       id: nextId(store.stockMovements),
       business_id: id,
@@ -420,57 +565,75 @@ const api = async (path, opts = {}) => {
   }
   if (route === "/invoices") {
     if (method === "POST") {
-      let customer = scoped(store.customers).find(
-        (row) => row.id === Number(data.customer_id),
-      );
       const customerName = String(
         data.customer_name || data.customer_text || "",
       ).trim();
-      if (!customer && customerName) {
-        customer = scoped(store.customers).find(
-          (row) => row.name.toLowerCase() === customerName.toLowerCase(),
-        ) || {
+      if (!customerName) throw new Error("Provide a customer name.");
+      let customer = scoped(store.customers).find(
+        (row) => row.name.toLowerCase() === customerName.toLowerCase(),
+      );
+      if (!customer) {
+        customer = {
           id: nextId(store.customers),
           business_id: id,
           name: customerName,
         };
-        if (!store.customers.some((row) => row.id === customer.id))
-          store.customers.push(customer);
+        store.customers.push(customer);
       }
-      if (!customer) throw new Error("Provide a customer name.");
-      const product = scoped(store.products).find(
-        (row) => row.id === Number(data.product_id),
+      const productName = String(data.product_name || "").trim();
+      if (!productName) throw new Error("Provide a product name.");
+      let product = scoped(store.products).find(
+        (row) => row.name.toLowerCase() === productName.toLowerCase(),
       );
-      if (!product) throw new Error("Choose a product.");
       const qty = Number(data.qty);
-      const unit_price = Number(data.unit_price || product.sell_price);
+      const unitPrice = Number(data.unit_price);
+      if (!Number.isFinite(qty) || qty <= 0)
+        throw new Error(
+          "Invoice qty must be a finite number greater than zero.",
+        );
+      if (!Number.isFinite(unitPrice) || unitPrice < 0)
+        throw new Error(
+          "Invoice unit price must be a valid number greater than or equal to zero.",
+        );
+      const invoiceDate = data.occurred_at
+        ? new Date(`${data.occurred_at}T12:00:00`)
+        : new Date();
       const invoice = {
         id: nextId(store.invoices),
         business_id: id,
         customer_id: customer.id,
-        product_id: product.id,
+        product_id: product ? product.id : null,
+        product_name: productName,
         qty,
-        unit_price,
+        unit_price: unitPrice,
         status: data.status || "unpaid",
-        created_at: new Date().toISOString(),
+        created_at: Number.isNaN(invoiceDate.getTime())
+          ? new Date().toISOString()
+          : invoiceDate.toISOString(),
       };
+      if (product) {
+        if (qty > product.stock_qty)
+          throw new Error("This invoice would oversell the available stock.");
+        product.stock_qty -= qty;
+      }
       store.invoices.push(invoice);
-      product.stock_qty -= qty;
-      store.stockMovements.push({
-        id: nextId(store.stockMovements),
-        business_id: id,
-        product_id: product.id,
-        change_qty: -qty,
-        occurred_at: invoice.created_at,
-      });
+      if (product) {
+        store.stockMovements.push({
+          id: nextId(store.stockMovements),
+          business_id: id,
+          product_id: product.id,
+          change_qty: -qty,
+          occurred_at: invoice.created_at,
+        });
+      }
       if (invoice.status === "paid")
         store.transactions.push({
           id: nextId(store.transactions),
           business_id: id,
           type: "income",
           category: "Sales",
-          description: "Invoice sale",
-          amount: qty * unit_price,
+          description: `Invoice sale (${productName})`,
+          amount: qty * unitPrice,
           occurred_at: invoice.created_at,
         });
       await save();
@@ -483,6 +646,7 @@ const api = async (path, opts = {}) => {
           store.customers.find((row) => row.id === invoice.customer_id)?.name ||
           "Customer",
         product_name:
+          invoice.product_name ||
           store.products.find((row) => row.id === invoice.product_id)?.name ||
           "Product",
         total: invoice.qty * invoice.unit_price,
@@ -596,6 +760,13 @@ const reportQuery = () => {
   }
   return `?${params.toString()}`;
 };
+const setDefaultDateInputs = () => {
+  const today = new Date();
+  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  document.querySelectorAll('input[name="occurred_at"]').forEach((input) => {
+    if (!input.value) input.value = iso;
+  });
+};
 const reloadReports = () =>
   Promise.all([loadDashboard(), loadAccounting()]).catch((error) =>
     showToast(error.message, true),
@@ -605,6 +776,7 @@ const periodSelect = document.getElementById("report-period");
 const customRange = document.getElementById("custom-date-range");
 const customPeriodToggle = document.getElementById("custom-period-toggle");
 const today = new Date();
+setDefaultDateInputs();
 document.getElementById("report-end").value = isoDate(today);
 document.getElementById("report-start").value = isoDate(
   new Date(today.getTime() - 29 * 86400000),
@@ -646,6 +818,15 @@ const openMobileMenu = () => {
   if (sidebar) sidebar.classList.add("open");
 };
 const activateTab = (tab) => {
+  if (!ensurePlanAccess(tab)) {
+    const planName = PLAN_CONFIG[activePlan]?.name || "BizTrack Basic";
+    showToast(`Available on ${planName} — Try for free`, true);
+    const fallback =
+      Object.keys(PLAN_CONFIG).find((key) =>
+        PLAN_CONFIG[key].pages.includes(tab),
+      ) || "businesses";
+    tab = fallback;
+  }
   document
     .querySelectorAll(".nav-item")
     .forEach((item) =>
@@ -654,10 +835,11 @@ const activateTab = (tab) => {
   document
     .querySelectorAll(".tab")
     .forEach((item) => item.classList.add("hidden"));
-  document.getElementById(`tab-${tab}`).classList.remove("hidden");
+  const target = document.getElementById(`tab-${tab}`);
+  if (target) target.classList.remove("hidden");
   if (window.innerWidth <= 900) closeMobileMenu();
   if (tab === "overall") loadOverallProfitLoss();
-  if (["dashboard", "accounting", "inventory", "market", "sales"].includes(tab))
+  if (["dashboard", "accounting", "inventory", "sales", "news"].includes(tab))
     loadTab(tab);
 };
 if (mobileMenuButton) {
@@ -682,7 +864,7 @@ const renderBusinesses = () => {
     businesses
       .map(
         (business) =>
-          `<option value="${business.id}">${business.name}</option>`,
+          `<option value="${business.id}">${escapeHtml(business.name)}</option>`,
       )
       .join("");
   select.value = currentBusinessId;
@@ -690,7 +872,7 @@ const renderBusinesses = () => {
     ? businesses
         .map(
           (business) =>
-            `<button class="business-row${String(business.id) === String(currentBusinessId) ? " selected" : ""}" data-business-id="${business.id}"><strong>${business.name}</strong><span>${business.business_type || "Business"}</span></button>`,
+            `<button class="business-row${String(business.id) === String(currentBusinessId) ? " selected" : ""}" data-business-id="${business.id}"><strong>${escapeHtml(business.name)}</strong><span>${escapeHtml(business.business_type || "Business")}</span></button>`,
         )
         .join("")
     : '<div class="empty">Add your first business to get started.</div>';
@@ -705,7 +887,15 @@ const renderBusinesses = () => {
 };
 const selectBusiness = (id) => {
   currentBusinessId = String(id);
-  localStorage.setItem("biztrack-business-id", currentBusinessId);
+  if (activeUser?.id) {
+    localStorage.setItem(
+      getBusinessStorageKey(activeUser.id),
+      currentBusinessId,
+    );
+    localStorage.removeItem("biztrack-business-id");
+  } else {
+    localStorage.setItem("biztrack-business-id", currentBusinessId);
+  }
   const business = businesses.find(
     (item) => String(item.id) === currentBusinessId,
   );
@@ -774,6 +964,8 @@ contextMenu.addEventListener("click", async (event) => {
       await api(`/businesses/${contextBusinessId}`, { method: "DELETE" });
       if (String(currentBusinessId) === String(contextBusinessId)) {
         currentBusinessId = "";
+        if (activeUser?.id)
+          localStorage.removeItem(getBusinessStorageKey(activeUser.id));
         localStorage.removeItem("biztrack-business-id");
       }
       await loadBusinesses();
@@ -833,19 +1025,46 @@ const showAuthPanel = (signup) => {
 const beginSession = async (account, key) => {
   activeUser = { id: account.id, key, salt: account.salt };
   activePlan = account.plan || "";
+  const businessKey = getBusinessStorageKey(account.id);
   currentBusinessId =
-    localStorage.getItem(`biztrack-business-${account.id}`) || "";
+    localStorage.getItem(businessKey) ||
+    localStorage.getItem("biztrack-business-id") ||
+    "";
+  if (currentBusinessId) localStorage.setItem(businessKey, currentBusinessId);
+  localStorage.removeItem("biztrack-business-id");
   document.getElementById("auth-screen").classList.add("hidden");
   if (activePlan) {
     document.getElementById("plan-screen").classList.add("hidden");
     document.querySelector(".app").classList.remove("hidden");
     document.getElementById("account-plan").textContent =
-      `${activePlan === "premium" ? "Premium" : "Free"} plan`;
+      PLAN_CONFIG[activePlan]?.name || "BizTrack Basic";
+    updatePlanUI();
     await loadBusinesses();
   } else {
     document.querySelector(".app").classList.add("hidden");
     document.getElementById("plan-screen").classList.remove("hidden");
+    showPlanSelection();
   }
+};
+const showPlanSelection = () => {
+  if (!document.getElementById("plan-screen")) return;
+  const cards = document.querySelectorAll("[data-plan-card]");
+  cards.forEach((card) => {
+    const code = card.dataset.planCard;
+    card.classList.toggle("selected", activePlan === code);
+  });
+};
+const updatePlanUI = () => {
+  document.querySelectorAll("[data-plan-card]").forEach((card) => {
+    card.classList.toggle("selected", activePlan === card.dataset.planCard);
+  });
+  document.querySelectorAll(".nav-item").forEach((item) => {
+    const allowed =
+      !item.dataset.tab ||
+      item.dataset.tab === "businesses" ||
+      planAllowed(item.dataset.tab);
+    item.style.display = allowed ? "" : "none";
+  });
 };
 const showAuthError = (error, fallback) => {
   if (error?.message === "Supabase is not configured.") {
@@ -966,42 +1185,28 @@ document
 document.querySelectorAll(".plan-choice").forEach((button) => {
   button.addEventListener("click", async () => {
     const plan = button.dataset.plan;
-    if (plan === "free") {
-      try {
-        await updateSubscription("free");
-        document.getElementById("plan-screen").classList.add("hidden");
-        document.querySelector(".app").classList.remove("hidden");
-        await loadBusinesses();
-        showToast("Free plan selected. Welcome to BizTrack.");
-      } catch (error) {
-        document.getElementById("plan-message").textContent = error.message;
-      }
-    } else {
-      document.querySelector(".plan-grid").classList.add("hidden");
-      document.getElementById("payment-form").classList.remove("hidden");
-      document.getElementById("plan-message").textContent = "";
-    }
-  });
-});
-document.getElementById("back-to-plans").addEventListener("click", () => {
-  document.querySelector(".plan-grid").classList.remove("hidden");
-  document.getElementById("payment-form").classList.add("hidden");
-});
-document
-  .getElementById("payment-form")
-  .addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const method = new FormData(event.currentTarget).get("payment_method");
     try {
-      await updateSubscription("premium", method);
+      await updateSubscription(plan);
       document.getElementById("plan-screen").classList.add("hidden");
       document.querySelector(".app").classList.remove("hidden");
+      updatePlanUI();
       await loadBusinesses();
       showToast(
-        `Premium selected with ${method.replace("_", " ")}. Payment setup is ready to connect.`,
+        `${PLAN_CONFIG[plan]?.name || plan} selected. Welcome to BizTrack.`,
       );
     } catch (error) {
       document.getElementById("plan-message").textContent = error.message;
+    }
+  });
+});
+document
+  .getElementById("change-plan-link")
+  ?.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (supabaseClient && activeUser) {
+      document.querySelector(".app").classList.add("hidden");
+      document.getElementById("plan-screen").classList.remove("hidden");
+      showPlanSelection();
     }
   });
 document.getElementById("logout-button").addEventListener("click", async () => {
@@ -1101,6 +1306,25 @@ function loadTab(tab) {
   if (tab === "inventory") loadInventory();
   if (tab === "market") loadMarket();
   if (tab === "sales") loadSales();
+  if (tab === "news") loadNews();
+}
+
+async function loadNews() {
+  const container = document.getElementById("news-list");
+  const lockPanel = document.getElementById("news-lock-panel");
+  if (!container) return;
+  if (!planAllowed("news")) {
+    lockPanel?.classList.remove("hidden");
+    container.innerHTML = "";
+    return;
+  }
+  lockPanel?.classList.add("hidden");
+  container.innerHTML = `
+    <div class="card">
+      <div class="section-title">Latest business news</div>
+      <div class="empty">News is configured server-side via the Supabase Edge Function. Deploy the function and refresh here to show live RSS items.</div>
+    </div>
+  `;
 }
 
 async function loadOverallProfitLoss() {
@@ -1120,7 +1344,7 @@ async function loadOverallProfitLoss() {
       ? report.businesses
           .map(
             (business) =>
-              `<tr><td>${business.name}</td><td style="text-align:right">${fmt(business.income)}</td><td style="text-align:right">${fmt(business.expenses)}</td><td style="text-align:right" class="${business.net_profit >= 0 ? "good" : "bad"}">${fmt(business.net_profit)}</td></tr>`,
+              `<tr><td>${escapeHtml(business.name)}</td><td style="text-align:right">${fmt(business.income)}</td><td style="text-align:right">${fmt(business.expenses)}</td><td style="text-align:right" class="${business.net_profit >= 0 ? "good" : "bad"}">${fmt(business.net_profit)}</td></tr>`,
           )
           .join("")
       : '<tr><td colspan="4" class="empty">No businesses have been added yet.</td></tr>';
@@ -1167,7 +1391,7 @@ async function loadDashboard() {
         .map(
           (p) =>
             `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px;">
-      <span>${p.name}</span><span class="pill low">${p.stock_qty} ${p.unit} ${uiText("left")}</span>
+      <span>${escapeHtml(p.name)}</span><span class="pill low">${p.stock_qty} ${escapeHtml(p.unit || "unit")} ${uiText("left")}</span>
     </div>`,
         )
         .join("")
@@ -1178,7 +1402,7 @@ async function loadDashboard() {
     d.top_products
       .map(
         (p) =>
-          `<tr><td>${p.name}</td><td>${p.qty_sold}</td><td>${fmt(p.revenue)}</td></tr>`,
+          `<tr><td>${escapeHtml(p.name)}</td><td>${p.qty_sold}</td><td>${fmt(p.revenue)}</td></tr>`,
       )
       .join("") ||
     `<tr><td colspan="3" class="empty">${uiText("No sales yet.")}</td></tr>`;
@@ -1196,7 +1420,7 @@ async function loadAccounting() {
     pl.income_by_category
       .map(
         (r) =>
-          `<tr><td>${r.category}</td><td style="text-align:right">${fmt(r.total)}</td></tr>`,
+          `<tr><td>${escapeHtml(r.category)}</td><td style="text-align:right">${fmt(r.total)}</td></tr>`,
       )
       .join("") ||
     `<tr><td class="empty">${uiText("No income recorded.")}</td></tr>`;
@@ -1204,7 +1428,7 @@ async function loadAccounting() {
     pl.expense_by_category
       .map(
         (r) =>
-          `<tr><td>${r.category}</td><td style="text-align:right">${fmt(r.total)}</td></tr>`,
+          `<tr><td>${escapeHtml(r.category)}</td><td style="text-align:right">${fmt(r.total)}</td></tr>`,
       )
       .join("") ||
     `<tr><td class="empty">${uiText("No expenses recorded.")}</td></tr>`;
@@ -1215,9 +1439,9 @@ async function loadAccounting() {
   document.getElementById("txn-list").innerHTML = txns
     .map(
       (t) => `<tr>
-    <td>${t.occurred_at.slice(0, 10)}</td>
-    <td><span class="pill ${t.type === "income" ? "ok" : "low"}">${t.type}</span></td>
-    <td>${t.category}</td><td>${t.description || ""}</td>
+    <td>${formatLocalDate(t.occurred_at)}</td>
+    <td><span class="pill ${t.type === "income" ? "ok" : "low"}">${escapeHtml(t.type)}</span></td>
+    <td>${escapeHtml(t.category)}</td><td>${escapeHtml(t.description || "")}</td>
     <td style="text-align:right">${fmt(t.amount)}</td></tr>`,
     )
     .join("");
@@ -1227,10 +1451,10 @@ document.getElementById("txn-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
   const payload = Object.fromEntries(f);
-  payload.amount = Number(payload.amount);
   const button = document.getElementById("txn-submit");
+  payload.amount = Number(payload.amount);
   if (
-    !payload.category.trim() ||
+    !String(payload.category || "").trim() ||
     !Number.isFinite(payload.amount) ||
     payload.amount <= 0
   ) {
@@ -1246,6 +1470,8 @@ document.getElementById("txn-form").addEventListener("submit", async (e) => {
       body: JSON.stringify(payload),
     });
     e.target.reset();
+    const today = new Date();
+    e.target.elements.occurred_at.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     await Promise.all([loadAccounting(), loadDashboard()]);
     showToast("Transaction saved — your profit and loss is up to date.");
   } catch (err) {
@@ -1262,16 +1488,28 @@ let productsCache = [];
 async function loadInventory() {
   productsCache = await api("/products");
   document.getElementById("inv-list").innerHTML = productsCache
-    .map(
-      (p) => `<tr>
-    <td>${p.name}</td><td>${p.category || ""}</td>
-    <td><span class="pill ${p.stock_qty <= p.reorder_level ? "low" : "ok"}">${p.stock_qty} ${p.unit}</span></td>
-    <td>${p.reorder_level}</td><td>${fmt(p.cost_price)}</td><td>${fmt(p.sell_price)}</td>
+    .map((p) => {
+      const status =
+        p.stock_qty <= 0
+          ? "Out of stock"
+          : p.stock_qty <= LOW_STOCK_THRESHOLD
+            ? "Low stock"
+            : "Healthy";
+      const statusClass =
+        p.stock_qty <= 0
+          ? "low"
+          : p.stock_qty <= LOW_STOCK_THRESHOLD
+            ? "low"
+            : "ok";
+      return `<tr>
+    <td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.category || "")}</td>
+    <td><span class="pill ${statusClass}">${p.stock_qty} ${escapeHtml(p.unit || "unit")}</span><div class="sub">${status}</div></td>
+    <td>${p.stock_qty <= LOW_STOCK_THRESHOLD ? LOW_STOCK_THRESHOLD : "—"}</td><td>${fmt(p.cost_price)}</td><td>${fmt(p.sell_price)}</td>
     <td>
       <button class="btn small secondary" onclick="adjustStock(${p.id}, 10)">+10</button>
       <button class="btn small secondary" onclick="adjustStock(${p.id}, -10)">-10</button>
-    </td></tr>`,
-    )
+    </td></tr>`;
+    })
     .join("");
 }
 async function adjustStock(id, delta) {
@@ -1285,14 +1523,27 @@ async function adjustStock(id, delta) {
 document
   .getElementById("product-submit")
   .addEventListener("click", async () => {
-    const f = new FormData(document.getElementById("product-form"));
-    await api("/products", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(Object.fromEntries(f)),
-    });
-    document.getElementById("product-form").reset();
-    loadInventory();
+    const form = document.getElementById("product-form");
+    const submitButton = document.getElementById("product-submit");
+    const f = new FormData(form);
+    const payload = Object.fromEntries(f);
+    submitButton.disabled = true;
+    submitButton.textContent = "Saving…";
+    try {
+      await api("/products", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      form.reset();
+      await loadInventory();
+      showToast("Product saved.");
+    } catch (err) {
+      showToast(err.message || "Could not save product.", true);
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = "Add Product";
+    }
   });
 
 // ---- Market Intelligence ----
@@ -1399,9 +1650,9 @@ async function loadSales() {
   document.getElementById("invoice-list").innerHTML = invoices
     .map(
       (i) => `<tr>
-    <td>${i.created_at.slice(0, 10)}</td><td>${i.customer_name}</td><td>${i.product_name}</td>
+    <td>${formatLocalDate(i.created_at)}</td><td>${escapeHtml(i.customer_name)}</td><td>${escapeHtml(i.product_name)}</td>
     <td>${i.qty}</td><td>${fmt(i.unit_price)}</td><td>${fmt(i.total)}</td>
-    <td><span class="pill ${i.status}">${i.status}</span></td>
+    <td><span class="pill ${i.status}">${escapeHtml(i.status)}</span></td>
     <td>${i.status === "unpaid" ? `<button class="btn small secondary" onclick="markPaid(${i.id})">Mark Paid</button>` : ""}</td>
     </tr>`,
     )
@@ -1424,29 +1675,42 @@ async function markPaid(id) {
 document
   .getElementById("invoice-submit")
   .addEventListener("click", async () => {
-    const f = new FormData(document.getElementById("invoice-form"));
+    const form = document.getElementById("invoice-form");
+    const submitButton = document.getElementById("invoice-submit");
+    const f = new FormData(form);
     const payload = Object.fromEntries(f);
-    const customerText = (payload.customer_text || "").trim();
-    if (customerText) {
-      // If user typed a customer, prefer that (name or numeric id) over the select value.
-      payload.customer_name = customerText;
-      delete payload.customer_id;
-    }
-    // Remove empty optional fields to avoid sending empty strings
-    if (!payload.unit_price) delete payload.unit_price;
+    payload.qty = Number(payload.qty);
+    payload.unit_price = Number(payload.unit_price);
+    submitButton.disabled = true;
+    submitButton.textContent = "Saving…";
 
     try {
+      if (!String(payload.customer_name || "").trim())
+        throw new Error("Customer name is required.");
+      if (!String(payload.product_name || "").trim())
+        throw new Error("Product name is required.");
+      if (!Number.isFinite(payload.qty) || payload.qty <= 0)
+        throw new Error(
+          "Invoice qty must be a finite number greater than zero.",
+        );
+      if (!Number.isFinite(payload.unit_price) || payload.unit_price < 0)
+        throw new Error(
+          "Invoice unit price must be a finite number greater than or equal to zero.",
+        );
       await api("/invoices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       showToast("Invoice created.");
-      document.getElementById("invoice-form").reset();
+      form.reset();
       await Promise.all([loadSales(), loadInventory(), loadDashboard()]);
     } catch (err) {
       showToast(err.message || "Could not create invoice.", true);
       console.error(err);
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = "Create Invoice";
     }
   });
 
