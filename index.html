@@ -50,6 +50,13 @@
           <button id="show-signup" class="text-button" type="button">
             Create an account
           </button>
+          <button
+            class="text-button recovery-unlock"
+            type="button"
+            data-recovery-unlock
+          >
+            Unlock with recovery code
+          </button>
         </div>
         <div id="signup-panel" class="hidden">
           <h1>Create account</h1>
@@ -118,6 +125,13 @@
           <button class="btn" type="submit">Unlock workspace</button>
         </form>
         <p id="unlock-message" class="auth-message" role="status"></p>
+        <button
+          class="text-button recovery-unlock"
+          type="button"
+          data-recovery-unlock
+        >
+          Unlock with recovery code
+        </button>
       </div>
     </section>
     <section id="plan-screen" class="plan-screen hidden">
@@ -788,6 +802,6 @@
     </div>
     <script src="./static/vendor/supabase-2.56.0.min.js" defer></script>
     <script src="static/supabase-config.js" defer></script>
-    <script src="static/app.js?v=25" defer></script>
+    <script src="static/app.js?v=32" defer></script>
   </body>
 </html>

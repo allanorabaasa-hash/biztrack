@@ -128,11 +128,110 @@ const deriveKey = async (password, salt) => {
   );
   return { key, verifier };
 };
-const encryptStore = async (store) => {
+const createRecoveryCode = () =>
+  crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .toUpperCase()
+    .match(/.{1,4}/g)
+    .join("-");
+const wrapRawKey = async (rawKey, wrappingKey) => {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
-    activeUser.key,
+    wrappingKey,
+    rawKey,
+  );
+  return JSON.stringify({
+    iv: bytesToBase64(iv),
+    data: bytesToBase64(encrypted),
+  });
+};
+const unwrapDataKey = async (wrapped, wrappingKey) => {
+  const payload = JSON.parse(wrapped);
+  const rawKey = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(payload.iv) },
+    wrappingKey,
+    base64ToBytes(payload.data),
+  );
+  return crypto.subtle.importKey(
+    "raw",
+    rawKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+};
+const createDataKeyBundle = async (passwordKey) => {
+  const generated = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
+  const rawKey = await crypto.subtle.exportKey("raw", generated);
+  const dataKey = await crypto.subtle.importKey(
+    "raw",
+    rawKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+  const recoveryCode = createRecoveryCode();
+  const recoverySalt = bytesToBase64(
+    crypto.getRandomValues(new Uint8Array(16)),
+  );
+  const recoveryKey = await deriveKey(
+    recoveryCode.replace(/-/g, ""),
+    recoverySalt,
+  );
+  return {
+    dataKey,
+    dataKeyWrapped: await wrapRawKey(rawKey, passwordKey),
+    recoveryKeyWrapped: JSON.stringify({
+      salt: recoverySalt,
+      wrapped: await wrapRawKey(rawKey, recoveryKey.key),
+    }),
+    recoveryCode,
+  };
+};
+const unlockWithRecoveryCode = async (email, recoveryCode) => {
+  const account = await findLocalAccount(email);
+  if (!account?.encrypted_data || !account.recovery_key_wrapped)
+    throw new Error(
+      "No recovery key is saved on this device. Connect and sign in first.",
+    );
+  const recovery = JSON.parse(account.recovery_key_wrapped);
+  const recoveryKeys = await deriveKey(
+    String(recoveryCode)
+      .replace(/[^a-z0-9]/gi, "")
+      .toUpperCase(),
+    recovery.salt,
+  );
+  const key = await unwrapDataKey(recovery.wrapped, recoveryKeys.key);
+  await decryptPayload(account.encrypted_data, key);
+  await beginSession(
+    {
+      ...account,
+      id: account.user_id,
+      plan: account.plan || "",
+      dataKeyWrapped: account.data_key_wrapped,
+      recoveryKeyWrapped: account.recovery_key_wrapped,
+    },
+    key,
+  );
+  await openWorkspaceFromLocal();
+};
+const showRecoveryCode = (code) => {
+  if (!code) return;
+  window.alert(
+    `Save this recovery code somewhere private. It is shown only once and can unlock your workspace if you lose your password:\n\n${code}`,
+  );
+};
+const encryptStore = async (store, key = activeUser.key) => {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
     new TextEncoder().encode(JSON.stringify(store)),
   );
   return JSON.stringify({
@@ -229,6 +328,110 @@ const decryptPayload = async (encryptedData, key) => {
     ...JSON.parse(new TextDecoder().decode(decrypted)),
   };
 };
+const migrateLegacyWorkspace = async ({
+  userId,
+  email,
+  salt,
+  passwordKey,
+  initialWorkspace,
+}) => {
+  let workspace = initialWorkspace;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) {
+      const latest = await supabaseClient
+        .from("biztrack_workspaces")
+        .select(
+          "encrypted_data, updated_at, salt, data_key_wrapped, recovery_key_wrapped",
+        )
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (latest.error) throw latest.error;
+      workspace = latest.data;
+    }
+    if (workspace?.data_key_wrapped) {
+      const dataKey = await unwrapDataKey(
+        workspace.data_key_wrapped,
+        passwordKey,
+      );
+      return {
+        dataKey,
+        dataKeyWrapped: workspace.data_key_wrapped,
+        recoveryKeyWrapped: workspace.recovery_key_wrapped || null,
+        recoveryCode: null,
+      };
+    }
+    const remoteStore = workspace?.encrypted_data
+      ? await decryptPayload(workspace.encrypted_data, passwordKey)
+      : emptyStore();
+    let combined = remoteStore;
+    const cached = await localWorkspace(userId);
+    if (cached?.encrypted_data && cached.unsynced) {
+      try {
+        const cachedStore = await decryptPayload(
+          cached.encrypted_data,
+          passwordKey,
+        );
+        combined = mergeWorkspaces(cachedStore, remoteStore);
+      } catch {
+        throw new Error(
+          "Local changes could not be safely migrated. Keep this device data and retry.",
+        );
+      }
+    }
+    const bundle = await createDataKeyBundle(passwordKey);
+    const encryptedData = await encryptStore(combined, bundle.dataKey);
+    const updatedAt = new Date().toISOString();
+    const payload = {
+      user_id: userId,
+      salt,
+      encrypted_data: encryptedData,
+      data_key_wrapped: bundle.dataKeyWrapped,
+      recovery_key_wrapped: bundle.recoveryKeyWrapped,
+      updated_at: updatedAt,
+    };
+    let result;
+    if (workspace?.updated_at) {
+      result = await supabaseClient
+        .from("biztrack_workspaces")
+        .update(payload)
+        .eq("user_id", userId)
+        .eq("updated_at", workspace.updated_at)
+        .select("updated_at")
+        .maybeSingle();
+    } else {
+      result = await supabaseClient
+        .from("biztrack_workspaces")
+        .insert(payload)
+        .select("updated_at")
+        .maybeSingle();
+    }
+    if (result.error) {
+      if (result.error.code === "23505" || result.error.code === "PGRST116")
+        continue;
+      throw result.error;
+    }
+    if (!result.data) continue;
+    await saveLocalWorkspace({
+      ...(cached || {}),
+      user_id: userId,
+      email,
+      salt,
+      cachedKey: bundle.dataKey,
+      legacyPasswordKey: null,
+      data_key_wrapped: bundle.dataKeyWrapped,
+      recovery_key_wrapped: bundle.recoveryKeyWrapped,
+      plan: cached?.plan || "",
+      encrypted_data: encryptedData,
+      updated_at: updatedAt,
+      last_synced_at: new Date().toISOString(),
+      unsynced: false,
+    });
+    return bundle;
+  }
+  throw new Error(
+    "Workspace changed repeatedly during key migration. Your existing data was not replaced.",
+  );
+};
 const setSyncStatus = (state, lastSyncedAt = null) => {
   const labels = {
     synced: "Synced",
@@ -309,7 +512,7 @@ const mergeWorkspaces = (local, remote) => {
       (record) => {
         const key = String(record.id);
         const current = records.get(key);
-        if (!current || recordTime(record) > recordTime(current))
+        if (!current || recordTime(record) >= recordTime(current))
           records.set(key, record);
       },
     );
@@ -333,22 +536,57 @@ const readStore = async () => {
   if (!navigator.onLine || !supabaseClient) return emptyStore();
   const { data: workspace, error } = await supabaseClient
     .from("biztrack_workspaces")
-    .select("encrypted_data, updated_at, salt")
+    .select(
+      "encrypted_data, updated_at, salt, data_key_wrapped, recovery_key_wrapped",
+    )
     .eq("user_id", activeUser.id)
     .maybeSingle();
   if (error) throw new Error("Your workspace could not be loaded.");
   if (!workspace?.encrypted_data) return emptyStore();
   try {
-    const parsed = await decryptPayload(
-      workspace.encrypted_data,
-      activeUser.key,
-    );
+    let parsed;
+    if (workspace.data_key_wrapped) {
+      parsed = await decryptPayload(workspace.encrypted_data, activeUser.key);
+    } else {
+      if (!activeUser.legacyPasswordKey)
+        throw new Error(
+          "Legacy workspace requires a password login to finish safe key migration.",
+        );
+      parsed = await decryptPayload(
+        workspace.encrypted_data,
+        activeUser.legacyPasswordKey,
+      );
+      const migrated = await migrateLegacyWorkspace({
+        userId: activeUser.id,
+        email: activeUser.email,
+        salt: workspace.salt || activeUser.salt,
+        passwordKey: activeUser.legacyPasswordKey,
+        initialWorkspace: workspace,
+      });
+      activeUser.key = migrated.dataKey;
+      activeUser.dataKeyWrapped = migrated.dataKeyWrapped;
+      activeUser.recoveryKeyWrapped = migrated.recoveryKeyWrapped;
+      activeUser.legacyPasswordKey = null;
+      const migratedLocal = await localWorkspace(activeUser.id);
+      if (migratedLocal?.encrypted_data)
+        parsed = await decryptPayload(
+          migratedLocal.encrypted_data,
+          activeUser.key,
+        );
+      setSyncStatus("synced", migratedLocal?.last_synced_at);
+      return parsed;
+    }
     activeUser.workspaceUpdatedAt = workspace.updated_at || null;
     await saveLocalWorkspace({
       ...(local || {}),
       user_id: activeUser.id,
       email: activeUser.email || "",
       cachedKey: activeUser.key,
+      legacyPasswordKey: workspace.data_key_wrapped
+        ? null
+        : activeUser.legacyPasswordKey,
+      data_key_wrapped: workspace.data_key_wrapped || null,
+      recovery_key_wrapped: workspace.recovery_key_wrapped || null,
       salt: workspace.salt || activeUser.salt,
       plan: activePlan || local?.plan || "",
       encrypted_data: workspace.encrypted_data,
@@ -383,6 +621,12 @@ const writeStore = async (store) => {
     email: activeUser.email || previousLocal?.email || "",
     salt: activeUser.salt,
     cachedKey: activeUser.key,
+    data_key_wrapped:
+      activeUser.dataKeyWrapped || previousLocal?.data_key_wrapped || null,
+    recovery_key_wrapped:
+      activeUser.recoveryKeyWrapped ||
+      previousLocal?.recovery_key_wrapped ||
+      null,
     plan: activePlan || previousLocal?.plan || "",
     encrypted_data: encryptedData,
     updated_at: previousLocal?.updated_at || null,
@@ -405,25 +649,63 @@ const syncWorkspace = async () => {
   try {
     let local = await localWorkspace(userId);
     if (!local?.encrypted_data) return;
+    let planSyncedAt = null;
     if (local.planUnsynced) {
-      const { error: planError } = await supabaseClient
+      const { data: updatedProfile, error: planError } = await supabaseClient
         .from("biztrack_profiles")
         .update({
           subscription_plan: local.plan,
           updated_at: new Date().toISOString(),
         })
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        .select("user_id")
+        .maybeSingle();
       if (planError) throw planError;
+      if (!updatedProfile)
+        throw new Error("Plan update was not confirmed by Supabase.");
       local = { ...local, planUnsynced: false };
+      planSyncedAt = new Date().toISOString();
       await saveLocalWorkspace(local);
     }
     if (!local.unsynced) {
       const { data: latest, error } = await supabaseClient
         .from("biztrack_workspaces")
-        .select("encrypted_data, updated_at, salt")
+        .select(
+          "encrypted_data, updated_at, salt, data_key_wrapped, recovery_key_wrapped",
+        )
         .eq("user_id", userId)
         .maybeSingle();
       if (error) throw error;
+      if (latest?.encrypted_data && !latest.data_key_wrapped) {
+        if (!activeUser.legacyPasswordKey)
+          throw new Error(
+            "Legacy workspace requires a password login to finish safe key migration.",
+          );
+        const migrated = await migrateLegacyWorkspace({
+          userId,
+          email: activeUser.email,
+          salt: latest.salt || activeUser.salt,
+          passwordKey: activeUser.legacyPasswordKey,
+          initialWorkspace: latest,
+        });
+        activeUser.key = migrated.dataKey;
+        activeUser.dataKeyWrapped = migrated.dataKeyWrapped;
+        activeUser.recoveryKeyWrapped = migrated.recoveryKeyWrapped;
+        activeUser.legacyPasswordKey = null;
+        showRecoveryCode(migrated.recoveryCode);
+        local = await localWorkspace(userId);
+        setSyncStatus("synced", local?.last_synced_at);
+        if (
+          document.querySelector(".app")?.classList.contains("hidden") === false
+        ) {
+          await loadBusinesses();
+          const activeTab =
+            document.querySelector(".nav-item.active")?.dataset.tab;
+          if (activeTab === "overall") await loadOverallProfitLoss();
+          else if (activeTab) loadTab(activeTab);
+        }
+        return;
+      }
       if (latest?.encrypted_data && latest.updated_at !== local.updated_at) {
         await decryptPayload(latest.encrypted_data, activeUser.key);
         local = {
@@ -431,6 +713,9 @@ const syncWorkspace = async () => {
           encrypted_data: latest.encrypted_data,
           updated_at: latest.updated_at,
           salt: latest.salt || local.salt,
+          data_key_wrapped: latest.data_key_wrapped || local.data_key_wrapped,
+          recovery_key_wrapped:
+            latest.recovery_key_wrapped || local.recovery_key_wrapped,
           last_synced_at: new Date().toISOString(),
           unsynced: false,
         };
@@ -445,7 +730,18 @@ const syncWorkspace = async () => {
           else if (activeTab) loadTab(activeTab);
         }
       }
-      setSyncStatus("synced", local.last_synced_at);
+      if (planSyncedAt) {
+        local = { ...local, last_synced_at: planSyncedAt };
+        await saveLocalWorkspace(local);
+      }
+      if (local.planUnsynced) {
+        setSyncStatus(
+          navigator.onLine ? "failed" : "offline",
+          local.last_synced_at,
+        );
+        return;
+      }
+      setSyncStatus("synced", local.last_synced_at || planSyncedAt);
       return;
     }
     setSyncStatus("saving", local.last_synced_at);
@@ -481,6 +777,10 @@ const syncWorkspace = async () => {
         user_id: userId,
         salt: activeUser.salt,
         encrypted_data: local.encrypted_data,
+        data_key_wrapped:
+          activeUser.dataKeyWrapped || local.data_key_wrapped || null,
+        recovery_key_wrapped:
+          activeUser.recoveryKeyWrapped || local.recovery_key_wrapped || null,
         updated_at: nextUpdatedAt,
       };
       let result;
@@ -615,16 +915,18 @@ const updateSubscription = async (plan, paymentMethod = null) => {
     planUnsynced: true,
   });
   if (navigator.onLine && supabaseClient) {
-    const { error } = await supabaseClient
+    const { data: updatedProfile, error } = await supabaseClient
       .from("biztrack_profiles")
       .update({
         subscription_plan: plan,
         payment_method: paymentMethod,
         updated_at: new Date().toISOString(),
       })
-      .eq("user_id", activeUser.id);
+      .eq("user_id", activeUser.id)
+      .select("user_id")
+      .maybeSingle();
     if (error) console.warn("Plan update will need an online retry:", error);
-    else planSynced = true;
+    else planSynced = Boolean(updatedProfile);
   }
   if (planSynced)
     await saveLocalWorkspace({
@@ -1460,6 +1762,9 @@ const beginSession = async (account, key) => {
     salt: account.salt,
     email: account.email || "",
     session: account.session || null,
+    legacyPasswordKey: account.legacyPasswordKey || null,
+    dataKeyWrapped: account.dataKeyWrapped || null,
+    recoveryKeyWrapped: account.recoveryKeyWrapped || null,
   };
   activePlan = account.plan || "";
   const savedLocal = await localWorkspace(account.id);
@@ -1469,6 +1774,12 @@ const beginSession = async (account, key) => {
     email: account.email || savedLocal?.email || "",
     salt: account.salt,
     cachedKey: key,
+    legacyPasswordKey:
+      account.legacyPasswordKey || savedLocal?.legacyPasswordKey || null,
+    data_key_wrapped:
+      account.dataKeyWrapped || savedLocal?.data_key_wrapped || null,
+    recovery_key_wrapped:
+      account.recoveryKeyWrapped || savedLocal?.recovery_key_wrapped || null,
     plan: activePlan || savedLocal?.plan || "",
   });
   activePlan ||= savedLocal?.plan || "";
@@ -1580,7 +1891,8 @@ document
         throw new Error("Connect to the internet for first-time signup.");
       if (!supabaseClient) throw new Error("Supabase is not configured.");
       const salt = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
-      const { key } = await deriveKey(password, salt);
+      const passwordKeys = await deriveKey(password, salt);
+      const keyBundle = await createDataKeyBundle(passwordKeys.key);
       const { data, error } = await supabaseClient.auth.signUp({
         email,
         password,
@@ -1600,8 +1912,11 @@ document
         email,
         name: values.name,
       });
-      await beginSession(account, key);
+      account.dataKeyWrapped = keyBundle.dataKeyWrapped;
+      account.recoveryKeyWrapped = keyBundle.recoveryKeyWrapped;
+      await beginSession(account, keyBundle.dataKey);
       await writeStore(emptyStore());
+      showRecoveryCode(keyBundle.recoveryCode);
     } catch (error) {
       showAuthError(error, "Could not create your account.");
     }
@@ -1617,15 +1932,26 @@ document
         const known = await findLocalAccount(email);
         if (!known)
           throw new Error("First-time login requires an internet connection.");
-        const { key } = await deriveKey(String(values.password), known.salt);
+        const passwordKeys = await deriveKey(
+          String(values.password),
+          known.salt,
+        );
+        let key = passwordKeys.key;
         try {
-          if (known.encrypted_data)
+          if (known.data_key_wrapped)
+            key = await unwrapDataKey(known.data_key_wrapped, passwordKeys.key);
+          else if (known.encrypted_data)
             await decryptPayload(known.encrypted_data, key);
         } catch {
           throw new Error("Wrong password.");
         }
         await beginSession(
-          { ...known, id: known.user_id, plan: known.plan || "" },
+          {
+            ...known,
+            id: known.user_id,
+            plan: known.plan || "",
+            legacyPasswordKey: known.data_key_wrapped ? null : passwordKeys.key,
+          },
           key,
         );
         await openWorkspaceFromLocal();
@@ -1640,13 +1966,39 @@ document
       if (!data.user) throw new Error("Your account could not be found.");
       const { data: workspace, error: workspaceError } = await supabaseClient
         .from("biztrack_workspaces")
-        .select("salt")
+        .select(
+          "salt, encrypted_data, updated_at, data_key_wrapped, recovery_key_wrapped",
+        )
         .eq("user_id", data.user.id)
         .maybeSingle();
       if (workspaceError) throw workspaceError;
       const salt = workspace?.salt || data.user.user_metadata?.salt;
       if (!salt) throw new Error("Workspace encryption settings are missing.");
-      const { key } = await deriveKey(String(values.password), salt);
+      const passwordKeys = await deriveKey(String(values.password), salt);
+      let keyBundle;
+      if (workspace?.data_key_wrapped) {
+        try {
+          keyBundle = {
+            dataKey: await unwrapDataKey(
+              workspace.data_key_wrapped,
+              passwordKeys.key,
+            ),
+            dataKeyWrapped: workspace.data_key_wrapped,
+            recoveryKeyWrapped: workspace.recovery_key_wrapped || null,
+            recoveryCode: null,
+          };
+        } catch {
+          throw new Error("Wrong password.");
+        }
+      } else {
+        keyBundle = await migrateLegacyWorkspace({
+          userId: data.user.id,
+          email: data.user.email,
+          salt,
+          passwordKey: passwordKeys.key,
+          initialWorkspace: workspace,
+        });
+      }
       const { data: profile, error: profileError } = await supabaseClient
         .from("biztrack_profiles")
         .select("subscription_plan")
@@ -1659,6 +2011,11 @@ document
         salt,
         plan: profile?.subscription_plan || "",
         session: data.session,
+        dataKeyWrapped: keyBundle.dataKeyWrapped,
+        recoveryKeyWrapped: keyBundle.recoveryKeyWrapped,
+        legacyPasswordKey: workspace?.data_key_wrapped
+          ? null
+          : passwordKeys.key,
       };
       syncNeedsLogin = false;
       await saveProfile({
@@ -1666,8 +2023,8 @@ document
         email: data.user.email,
         name: data.user.user_metadata?.name,
       });
-      await beginSession(account, key);
-      if (!workspace) await writeStore(emptyStore());
+      await beginSession(account, keyBundle.dataKey);
+      showRecoveryCode(keyBundle.recoveryCode);
     } catch (error) {
       const email = String(values.email || "")
         .trim()
@@ -1680,13 +2037,37 @@ document
         try {
           const known = await findLocalAccount(email);
           if (known?.encrypted_data) {
-            const { key } = await deriveKey(
+            const passwordKeys = await deriveKey(
               String(values.password),
               known.salt,
             );
-            await decryptPayload(known.encrypted_data, key);
+            let key = known.data_key_wrapped
+              ? await unwrapDataKey(known.data_key_wrapped, passwordKeys.key)
+              : passwordKeys.key;
+            if (!known.data_key_wrapped) {
+              await decryptPayload(known.encrypted_data, key);
+              const migrated = await migrateLegacyWorkspace({
+                userId: known.user_id,
+                email: known.email,
+                salt: known.salt,
+                passwordKey: passwordKeys.key,
+                initialWorkspace: known,
+              });
+              key = migrated.dataKey;
+              known.data_key_wrapped = migrated.dataKeyWrapped;
+              known.recovery_key_wrapped = migrated.recoveryKeyWrapped;
+            }
             await beginSession(
-              { ...known, id: known.user_id, plan: known.plan || "" },
+              {
+                ...known,
+                id: known.user_id,
+                plan: known.plan || "",
+                dataKeyWrapped: known.data_key_wrapped || null,
+                recoveryKeyWrapped: known.recovery_key_wrapped || null,
+                legacyPasswordKey: known.data_key_wrapped
+                  ? null
+                  : passwordKeys.key,
+              },
               key,
             );
             await openWorkspaceFromLocal();
@@ -1715,10 +2096,21 @@ document
       const account = await findLocalAccount(lockedAccount?.email || "");
       if (!account)
         throw new Error("No offline workspace is saved on this device.");
-      const { key } = await deriveKey(password, account.salt);
-      if (account.encrypted_data)
+      const passwordKeys = await deriveKey(password, account.salt);
+      const key = account.data_key_wrapped
+        ? await unwrapDataKey(account.data_key_wrapped, passwordKeys.key)
+        : passwordKeys.key;
+      if (account.encrypted_data && !account.data_key_wrapped)
         await decryptPayload(account.encrypted_data, key);
-      await beginSession({ ...account, id: account.user_id }, key);
+      await beginSession(
+        {
+          ...account,
+          id: account.user_id,
+          dataKeyWrapped: account.data_key_wrapped || null,
+          recoveryKeyWrapped: account.recovery_key_wrapped || null,
+        },
+        key,
+      );
       await openWorkspaceFromLocal();
       event.currentTarget.reset();
     } catch (error) {
@@ -1728,6 +2120,35 @@ document
           : "Wrong password.";
     }
   });
+
+document.querySelectorAll("[data-recovery-unlock]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const email =
+      lockedAccount?.email ||
+      document
+        .querySelector('#login-form input[name="email"]')
+        .value.trim()
+        .toLowerCase();
+    if (!email) {
+      authMessage("Enter your account email first.");
+      return;
+    }
+    const code = window.prompt("Enter your saved BizTrack recovery code:");
+    if (!code) return;
+    try {
+      await unlockWithRecoveryCode(email, code);
+    } catch {
+      const message = document.getElementById("unlock-message");
+      if (message)
+        message.textContent =
+          "Recovery code is invalid or no local workspace is available.";
+      else
+        authMessage(
+          "Recovery code is invalid or no local workspace is available.",
+        );
+    }
+  });
+});
 
 let lockedAccount = null;
 let inactivityTimer;
@@ -1789,14 +2210,14 @@ document
   });
 document.getElementById("logout-button").addEventListener("click", async () => {
   const current = activeUser ? await localWorkspace(activeUser.id) : null;
-  if (current?.unsynced) {
+  if (current?.unsynced || current?.planUnsynced) {
     const shouldSync = window.confirm(
       "There are unsynced changes. Sync before logging out? Cancel to stay signed in.",
     );
     if (!shouldSync) return;
     await syncWorkspace();
     const afterSync = await localWorkspace(activeUser.id);
-    if (afterSync?.unsynced) {
+    if (afterSync?.unsynced || afterSync?.planUnsynced) {
       const logOutWithLocalCopy = window.confirm(
         "Sync is unavailable. Log out and keep the unsynced encrypted data on this device?",
       );
@@ -1804,11 +2225,12 @@ document.getElementById("logout-button").addEventListener("click", async () => {
     }
   }
   const latest = activeUser ? await localWorkspace(activeUser.id) : null;
-  const removeDeviceData = latest?.unsynced
-    ? false
-    : window.confirm(
-        "Remove this device's offline data? Choose Cancel to keep offline access.",
-      );
+  const removeDeviceData =
+    latest?.unsynced || latest?.planUnsynced
+      ? false
+      : window.confirm(
+          "Remove this device's offline data? Choose Cancel to keep offline access.",
+        );
   try {
     if (navigator.onLine && supabaseClient) await supabaseClient.auth.signOut();
   } finally {

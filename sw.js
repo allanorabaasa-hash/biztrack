@@ -1,9 +1,9 @@
-const CACHE_NAME = "biztrack-shell-v9";
+const CACHE_NAME = "biztrack-shell-v16";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./static/app.css?v=6",
-  "./static/app.js?v=25",
+  "./static/app.js?v=32",
   "./static/supabase-config.js",
   "./static/vendor/supabase-2.56.0.min.js",
   "./manifest.webmanifest",
