@@ -3,8 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b4f4a" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./static/icons/icon-192.png" />
     <title>BizTrack</title>
-    <link rel="stylesheet" href="static/app.css?v=5" />
+    <link rel="stylesheet" href="static/app.css?v=6" />
   </head>
   <body>
     <section id="auth-screen" class="auth-screen">
@@ -94,6 +97,29 @@
         <p id="auth-message" class="auth-message" role="status"></p>
       </div>
     </section>
+    <section id="lock-screen" class="auth-screen hidden">
+      <div class="auth-card">
+        <div class="brand auth-brand"><span>BizTrack</span></div>
+        <h1>Workspace locked</h1>
+        <p id="lock-account-email">
+          Enter your password to unlock this device.
+        </p>
+        <form id="unlock-form" class="inline">
+          <div>
+            <label for="unlock-password">Password</label>
+            <input
+              id="unlock-password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+            />
+          </div>
+          <button class="btn" type="submit">Unlock workspace</button>
+        </form>
+        <p id="unlock-message" class="auth-message" role="status"></p>
+      </div>
+    </section>
     <section id="plan-screen" class="plan-screen hidden">
       <div class="plan-shell">
         <div class="plan-heading">
@@ -167,6 +193,12 @@
         </button>
         <span class="mobile-brand">Biz<span>Track</span></span>
         <span class="mobile-page-title" id="mobile-page-title">Businesses</span>
+        <span
+          class="sync-status mobile-sync-status"
+          id="mobile-sync-status"
+          aria-live="polite"
+          >Not synced</span
+        >
       </header>
       <button
         class="drawer-backdrop"
@@ -206,6 +238,12 @@
         <button class="nav-item" type="button" data-tab="news">News</button>
         <div class="sidebar-footer">
           <div id="account-plan" class="account-plan"></div>
+          <div class="sync-status" id="sync-status" aria-live="polite">
+            Not synced
+          </div>
+          <button id="sync-now-button" class="sync-now-button" type="button">
+            Sync now
+          </button>
           <a href="#" id="change-plan-link" class="text-button">Change plan</a>
           <button id="logout-button" class="logout-button" type="button">
             Log out
@@ -746,11 +784,8 @@
         </div>
       </form>
     </div>
-    <script
-      src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.56.0"
-      defer
-    ></script>
+    <script src="./static/vendor/supabase-2.56.0.min.js" defer></script>
     <script src="static/supabase-config.js" defer></script>
-    <script src="static/app.js?v=16" defer></script>
+    <script src="static/app.js?v=24" defer></script>
   </body>
 </html>

@@ -140,75 +140,453 @@ const encryptStore = async (store) => {
     data: bytesToBase64(encrypted),
   });
 };
+const LOCAL_DB_NAME = "biztrack-local-v1";
+const LOCAL_STORE_NAME = "workspaces";
+const RECORD_COLLECTIONS = [
+  "businesses",
+  "products",
+  "customers",
+  "transactions",
+  "invoices",
+  "stockMovements",
+  "marketPrices",
+];
+let localDbPromise;
+let syncTimer;
+let syncInProgress = false;
+let syncRetryDelay = 10000;
+let syncNeedsLogin = false;
+const openLocalDb = () => {
+  if (!localDbPromise) {
+    localDbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(LOCAL_DB_NAME, 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(LOCAL_STORE_NAME))
+          request.result.createObjectStore(LOCAL_STORE_NAME, {
+            keyPath: "user_id",
+          });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+  return localDbPromise;
+};
+const localWorkspace = async (userId) => {
+  const db = await openLocalDb();
+  return new Promise((resolve, reject) => {
+    const request = db
+      .transaction(LOCAL_STORE_NAME)
+      .objectStore(LOCAL_STORE_NAME)
+      .get(userId);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+};
+const saveLocalWorkspace = async (record) => {
+  const db = await openLocalDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(LOCAL_STORE_NAME, "readwrite");
+    transaction.objectStore(LOCAL_STORE_NAME).put(record);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+};
+const removeLocalWorkspace = async (userId) => {
+  const db = await openLocalDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(LOCAL_STORE_NAME, "readwrite");
+    transaction.objectStore(LOCAL_STORE_NAME).delete(userId);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+};
+const findLocalAccount = async (email) => {
+  const db = await openLocalDb();
+  return new Promise((resolve, reject) => {
+    const request = db
+      .transaction(LOCAL_STORE_NAME)
+      .objectStore(LOCAL_STORE_NAME)
+      .getAll();
+    request.onsuccess = () =>
+      resolve(
+        request.result.find((item) => item.email?.toLowerCase() === email) ||
+          null,
+      );
+    request.onerror = () => reject(request.error);
+  });
+};
+const decryptPayload = async (encryptedData, key) => {
+  const payload = JSON.parse(encryptedData);
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(payload.iv) },
+    key,
+    base64ToBytes(payload.data),
+  );
+  return {
+    ...emptyStore(),
+    ...JSON.parse(new TextDecoder().decode(decrypted)),
+  };
+};
+const setSyncStatus = (state, lastSyncedAt = null) => {
+  const labels = {
+    synced: "Synced",
+    saving: "Saving…",
+    offline: "Offline — changes saved on this device",
+    failed: "Sync failed — will retry",
+    auth: "Sign in to sync — changes saved here",
+    pending: "Changes not synced",
+    none: "Not synced",
+  };
+  const time = lastSyncedAt
+    ? ` · ${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(lastSyncedAt))}`
+    : "";
+  ["sync-status", "mobile-sync-status"].forEach((id) => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = `${labels[state] || labels.none}${time}`;
+  });
+  const syncButton = document.getElementById("sync-now-button");
+  if (syncButton)
+    syncButton.textContent = syncNeedsLogin ? "Log in to sync" : "Sync now";
+};
+const queueWorkspaceSync = () => {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => syncWorkspace(), 3000);
+};
+const recordTime = (record) =>
+  record.updated_at ||
+  record.created_at ||
+  record.occurred_at ||
+  record.recorded_at ||
+  "1970-01-01T00:00:00.000Z";
+const stampWorkspaceChanges = (store, previous) => {
+  const now = new Date().toISOString();
+  store.deletedRecords ||= {};
+  RECORD_COLLECTIONS.forEach((collection) => {
+    const before = previous?.[collection] || [];
+    const after = store[collection] || [];
+    const beforeById = new Map(
+      before.map((record) => [String(record.id), record]),
+    );
+    const afterIds = new Set(after.map((record) => String(record.id)));
+    after.forEach((record) => {
+      const original = beforeById.get(String(record.id));
+      if (!original) {
+        record.created_at ||= now;
+        record.updated_at ||= now;
+      } else if (JSON.stringify(original) !== JSON.stringify(record)) {
+        record.updated_at = now;
+      }
+    });
+    const deleted = store.deletedRecords[collection] || [];
+    before.forEach((record) => {
+      if (
+        !afterIds.has(String(record.id)) &&
+        !deleted.some((item) => String(item.id) === String(record.id))
+      )
+        deleted.push({ id: record.id, deleted_at: now });
+    });
+    store.deletedRecords[collection] = deleted;
+  });
+};
+const mergeWorkspaces = (local, remote) => {
+  const merged = { ...emptyStore(), ...remote, ...local, deletedRecords: {} };
+  RECORD_COLLECTIONS.forEach((collection) => {
+    const deletions = new Map();
+    [
+      ...(remote.deletedRecords?.[collection] || []),
+      ...(local.deletedRecords?.[collection] || []),
+    ].forEach((item) => {
+      const key = String(item.id);
+      const current = deletions.get(key);
+      if (!current || item.deleted_at > current.deleted_at)
+        deletions.set(key, item);
+    });
+    merged.deletedRecords[collection] = [...deletions.values()];
+    const records = new Map();
+    [...(remote[collection] || []), ...(local[collection] || [])].forEach(
+      (record) => {
+        const key = String(record.id);
+        const current = records.get(key);
+        if (!current || recordTime(record) > recordTime(current))
+          records.set(key, record);
+      },
+    );
+    merged[collection] = [...records.values()].filter((record) => {
+      const deletion = deletions.get(String(record.id));
+      return !deletion;
+    });
+  });
+  return merged;
+};
 const readStore = async () => {
-  if (!supabaseClient || !activeUser)
-    throw new Error("Your session has expired.");
+  if (!activeUser) throw new Error("Unlock your workspace to continue.");
+  const local = await localWorkspace(activeUser.id);
+  if (local?.encrypted_data) {
+    try {
+      return await decryptPayload(local.encrypted_data, activeUser.key);
+    } catch {
+      throw new Error("Your private data could not be unlocked.");
+    }
+  }
+  if (!navigator.onLine || !supabaseClient) return emptyStore();
   const { data: workspace, error } = await supabaseClient
     .from("biztrack_workspaces")
-    .select("encrypted_data, updated_at")
+    .select("encrypted_data, updated_at, salt")
     .eq("user_id", activeUser.id)
     .maybeSingle();
   if (error) throw new Error("Your workspace could not be loaded.");
   if (!workspace?.encrypted_data) return emptyStore();
   try {
-    const payload = JSON.parse(workspace.encrypted_data);
-    const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: base64ToBytes(payload.iv) },
+    const parsed = await decryptPayload(
+      workspace.encrypted_data,
       activeUser.key,
-      base64ToBytes(payload.data),
     );
-    const parsed = JSON.parse(new TextDecoder().decode(decrypted));
     activeUser.workspaceUpdatedAt = workspace.updated_at || null;
-    return {
-      ...emptyStore(),
-      ...parsed,
-    };
+    await saveLocalWorkspace({
+      ...(local || {}),
+      user_id: activeUser.id,
+      email: activeUser.email || "",
+      cachedKey: activeUser.key,
+      salt: workspace.salt || activeUser.salt,
+      plan: activePlan || local?.plan || "",
+      encrypted_data: workspace.encrypted_data,
+      updated_at: workspace.updated_at || null,
+      last_synced_at: new Date().toISOString(),
+      unsynced: false,
+    });
+    return parsed;
   } catch {
     throw new Error("Your private data could not be unlocked.");
   }
 };
-const writeStore = async (store, options = {}) => {
-  if (!supabaseClient || !activeUser)
-    throw new Error("Your session has expired.");
-  const encryptedData = await encryptStore(store);
-  const payload = {
-    user_id: activeUser.id,
-    salt: activeUser.salt,
-    encrypted_data: encryptedData,
-    updated_at: new Date().toISOString(),
-  };
-  const expectedUpdatedAt =
-    activeUser.workspaceUpdatedAt || options.expectedUpdatedAt;
-  let result;
-  if (expectedUpdatedAt) {
-    result = await supabaseClient
-      .from("biztrack_workspaces")
-      .update(payload)
-      .eq("user_id", activeUser.id)
-      .eq("updated_at", expectedUpdatedAt);
-  } else {
-    result = await supabaseClient
-      .from("biztrack_workspaces")
-      .upsert(payload, { onConflict: "user_id" });
-  }
-  const { error, count } = result || {};
-  if (error) throw new Error("Your workspace could not be saved.");
-  if ((typeof count === "number" && count === 0) || (result && !result.data)) {
-    const latest = await supabaseClient
-      .from("biztrack_workspaces")
-      .select("encrypted_data, updated_at")
-      .eq("user_id", activeUser.id)
-      .maybeSingle();
-    if (latest?.data) {
-      activeUser.workspaceUpdatedAt = latest.data.updated_at;
-      throw new Error(
-        "Your data was changed on another device — reloaded the latest version.",
+const writeStore = async (store) => {
+  if (!activeUser) throw new Error("Unlock your workspace to continue.");
+  const previousLocal = await localWorkspace(activeUser.id);
+  let previous = null;
+  if (previousLocal?.encrypted_data) {
+    try {
+      previous = await decryptPayload(
+        previousLocal.encrypted_data,
+        activeUser.key,
       );
+    } catch {
+      previous = null;
     }
-    throw new Error("Your workspace could not be saved.");
   }
-  activeUser.workspaceUpdatedAt = payload.updated_at;
+  stampWorkspaceChanges(store, previous);
+  const encryptedData = await encryptStore(store);
+  await saveLocalWorkspace({
+    ...(previousLocal || {}),
+    user_id: activeUser.id,
+    email: activeUser.email || previousLocal?.email || "",
+    salt: activeUser.salt,
+    cachedKey: activeUser.key,
+    plan: activePlan || previousLocal?.plan || "",
+    encrypted_data: encryptedData,
+    updated_at: previousLocal?.updated_at || null,
+    last_synced_at: previousLocal?.last_synced_at || null,
+    unsynced: true,
+  });
+  setSyncStatus(
+    navigator.onLine ? "saving" : "offline",
+    previousLocal?.last_synced_at,
+  );
+  queueWorkspaceSync();
 };
+const syncWorkspace = async () => {
+  if (syncInProgress || !activeUser || !navigator.onLine || !supabaseClient)
+    return;
+  syncInProgress = true;
+  const userId = activeUser.id;
+  let attemptedCiphertext = null;
+  let failed = false;
+  try {
+    let local = await localWorkspace(userId);
+    if (!local?.encrypted_data) return;
+    if (local.planUnsynced) {
+      const { error: planError } = await supabaseClient
+        .from("biztrack_profiles")
+        .update({
+          subscription_plan: local.plan,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", userId);
+      if (planError) throw planError;
+      local = { ...local, planUnsynced: false };
+      await saveLocalWorkspace(local);
+    }
+    if (!local.unsynced) {
+      const { data: latest, error } = await supabaseClient
+        .from("biztrack_workspaces")
+        .select("encrypted_data, updated_at, salt")
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (error) throw error;
+      if (latest?.encrypted_data && latest.updated_at !== local.updated_at) {
+        await decryptPayload(latest.encrypted_data, activeUser.key);
+        local = {
+          ...local,
+          encrypted_data: latest.encrypted_data,
+          updated_at: latest.updated_at,
+          salt: latest.salt || local.salt,
+          last_synced_at: new Date().toISOString(),
+          unsynced: false,
+        };
+        await saveLocalWorkspace(local);
+        if (
+          document.querySelector(".app")?.classList.contains("hidden") === false
+        ) {
+          await loadBusinesses();
+          const activeTab =
+            document.querySelector(".nav-item.active")?.dataset.tab;
+          if (activeTab === "overall") await loadOverallProfitLoss();
+          else if (activeTab) loadTab(activeTab);
+        }
+      }
+      setSyncStatus("synced", local.last_synced_at);
+      return;
+    }
+    setSyncStatus("saving", local.last_synced_at);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { data: remote, error: readError } = await supabaseClient
+        .from("biztrack_workspaces")
+        .select("encrypted_data, updated_at, salt")
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (readError) throw readError;
+      let localStore = await decryptPayload(
+        local.encrypted_data,
+        activeUser.key,
+      );
+      if (remote?.encrypted_data && remote.updated_at !== local.updated_at) {
+        const remoteStore = await decryptPayload(
+          remote.encrypted_data,
+          activeUser.key,
+        );
+        localStore = mergeWorkspaces(localStore, remoteStore);
+        const encryptedMerged = await encryptStore(localStore);
+        local = {
+          ...local,
+          encrypted_data: encryptedMerged,
+          updated_at: remote.updated_at,
+          unsynced: true,
+        };
+        await saveLocalWorkspace(local);
+      }
+      const nextUpdatedAt = new Date().toISOString();
+      attemptedCiphertext = local.encrypted_data;
+      const payload = {
+        user_id: userId,
+        salt: activeUser.salt,
+        encrypted_data: local.encrypted_data,
+        updated_at: nextUpdatedAt,
+      };
+      let result;
+      if (remote?.updated_at) {
+        result = await supabaseClient
+          .from("biztrack_workspaces")
+          .update(payload)
+          .eq("user_id", userId)
+          .eq("updated_at", remote.updated_at)
+          .select("updated_at")
+          .maybeSingle();
+      } else {
+        result = await supabaseClient
+          .from("biztrack_workspaces")
+          .insert(payload)
+          .select("updated_at")
+          .maybeSingle();
+      }
+      if (result.error) {
+        if (result.error.code === "23505" || result.error.code === "PGRST116")
+          continue;
+        throw result.error;
+      }
+      if (!result.data) continue;
+      const fresh = await localWorkspace(userId);
+      if (fresh?.encrypted_data === local.encrypted_data) {
+        const syncedAt = new Date().toISOString();
+        await saveLocalWorkspace({
+          ...fresh,
+          updated_at: nextUpdatedAt,
+          last_synced_at: syncedAt,
+          unsynced: false,
+        });
+        activeUser.workspaceUpdatedAt = nextUpdatedAt;
+        syncRetryDelay = 10000;
+        setSyncStatus("synced", syncedAt);
+      }
+      return;
+    }
+    throw new Error("Workspace changed repeatedly while syncing.");
+  } catch (error) {
+    failed = true;
+    console.warn("Workspace sync deferred:", error);
+    const latest = await localWorkspace(userId);
+    syncNeedsLogin = error?.status === 401;
+    setSyncStatus(
+      syncNeedsLogin ? "auth" : navigator.onLine ? "failed" : "offline",
+      latest?.last_synced_at,
+    );
+    if (syncNeedsLogin) {
+      showToast(
+        "Your session expired. Log in to sync; local changes are safe.",
+        true,
+      );
+    } else if (navigator.onLine) {
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(() => syncWorkspace(), syncRetryDelay);
+      syncRetryDelay = Math.min(syncRetryDelay * 2, 120000);
+    }
+  } finally {
+    syncInProgress = false;
+    const pending = await localWorkspace(userId).catch(() => null);
+    if (
+      !failed &&
+      pending?.unsynced &&
+      pending.encrypted_data !== attemptedCiphertext &&
+      navigator.onLine
+    )
+      queueWorkspaceSync();
+  }
+};
+document
+  .getElementById("sync-now-button")
+  ?.addEventListener("click", async () => {
+    if (syncNeedsLogin) {
+      document.querySelector(".app").classList.add("hidden");
+      document.getElementById("auth-screen").classList.remove("hidden");
+      showAuthPanel(false);
+      authMessage(
+        "Log in to sync. Your encrypted changes remain saved on this device.",
+      );
+      document.querySelector('#login-form input[name="email"]').value =
+        activeUser?.email || "";
+      return;
+    }
+    await syncWorkspace();
+    const local = activeUser ? await localWorkspace(activeUser.id) : null;
+    if (local && !local.unsynced) showToast("Workspace synced.");
+  });
+window.addEventListener("online", async () => {
+  if (activeUser && supabaseClient) {
+    try {
+      await supabaseClient.auth.refreshSession();
+    } catch {
+      // Local work remains available when the cached server session expires.
+    }
+    await syncWorkspace();
+  }
+});
+window.addEventListener("offline", async () => {
+  const local = activeUser ? await localWorkspace(activeUser.id) : null;
+  setSyncStatus("offline", local?.last_synced_at);
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") syncWorkspace();
+});
 const saveProfile = async ({ id, email, name }) => {
   if (!supabaseClient) throw new Error("Supabase is not configured.");
   const { error } = await supabaseClient.from("biztrack_profiles").upsert(
@@ -223,18 +601,29 @@ const saveProfile = async ({ id, email, name }) => {
   if (error) throw error;
 };
 const updateSubscription = async (plan, paymentMethod = null) => {
-  if (!supabaseClient || !activeUser)
-    throw new Error("Your session has expired.");
-  const { error } = await supabaseClient
-    .from("biztrack_profiles")
-    .update({
-      subscription_plan: plan,
-      payment_method: paymentMethod,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("user_id", activeUser.id);
-  if (error) throw error;
+  if (!activeUser) throw new Error("Unlock your workspace to continue.");
   activePlan = plan;
+  const local = await localWorkspace(activeUser.id);
+  await saveLocalWorkspace({
+    ...(local || {}),
+    user_id: activeUser.id,
+    email: activeUser.email || local?.email || "",
+    salt: activeUser.salt,
+    cachedKey: activeUser.key,
+    plan,
+    planUnsynced: !navigator.onLine,
+  });
+  if (navigator.onLine && supabaseClient) {
+    const { error } = await supabaseClient
+      .from("biztrack_profiles")
+      .update({
+        subscription_plan: plan,
+        payment_method: paymentMethod,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("user_id", activeUser.id);
+    if (error) console.warn("Plan update will need an online retry:", error);
+  }
   const planName = PLAN_CONFIG[plan]?.name || "Basic";
   document.getElementById("account-plan").textContent = planName;
 };
@@ -250,12 +639,11 @@ const ensurePlanAccess = (tab) => {
   if (tab === "dashboard" && !planAllowed("dashboard")) return false;
   return true;
 };
-const nextId = (rows) =>
-  Math.max(0, ...rows.map((row) => Number(row.id) || 0)) + 1;
+const nextId = () => crypto.randomUUID();
 const requestData = (opts) => (opts?.body ? JSON.parse(opts.body) : {});
 const requireBusiness = () => {
   if (!currentBusinessId) throw new Error("Select a business first.");
-  return Number(currentBusinessId);
+  return String(currentBusinessId);
 };
 const reportRange = (params) => {
   const period = params.get("period") || "monthly";
@@ -313,9 +701,9 @@ const api = async (path, opts = {}) => {
   const method = (opts.method || "GET").toUpperCase();
   const data = requestData(opts);
   const store = await readStore();
-  const businessId = Number(currentBusinessId);
+  const businessId = String(currentBusinessId);
   const scoped = (rows) =>
-    rows.filter((row) => Number(row.business_id) === businessId);
+    rows.filter((row) => String(row.business_id) === businessId);
   const save = async () => writeStore(store);
   if (route === "/businesses") {
     if (method === "GET")
@@ -331,7 +719,7 @@ const api = async (path, opts = {}) => {
     )
       throw new Error("A business with that name already exists.");
     const business = {
-      id: nextId(store.businesses),
+      id: nextId(),
       name,
       business_type: String(data.business_type || "").trim(),
       created_at: new Date().toISOString(),
@@ -340,10 +728,10 @@ const api = async (path, opts = {}) => {
     await save();
     return { ok: true, business };
   }
-  const businessMatch = route.match(/^\/businesses\/(\d+)$/);
+  const businessMatch = route.match(/^\/businesses\/([^/]+)$/);
   if (businessMatch) {
-    const id = Number(businessMatch[1]);
-    const business = store.businesses.find((row) => row.id === id);
+    const id = businessMatch[1];
+    const business = store.businesses.find((row) => String(row.id) === id);
     if (!business) throw new Error("Business not found.");
     if (method === "PATCH") {
       const name = String(data.name || "").trim();
@@ -368,9 +756,11 @@ const api = async (path, opts = {}) => {
         "stockMovements",
         "marketPrices",
       ].forEach((key) => {
-        store[key] = store[key].filter((row) => Number(row.business_id) !== id);
+        store[key] = store[key].filter((row) => String(row.business_id) !== id);
       });
-      store.businesses = store.businesses.filter((row) => row.id !== id);
+      store.businesses = store.businesses.filter(
+        (row) => String(row.id) !== id,
+      );
       await save();
       return { ok: true };
     }
@@ -378,7 +768,7 @@ const api = async (path, opts = {}) => {
   if (route === "/overall-profit-loss") {
     const businesses = store.businesses.map((business) => {
       const rows = store.transactions.filter(
-        (row) => row.business_id === business.id,
+        (row) => String(row.business_id) === String(business.id),
       );
       const income = rows
         .filter((row) => row.type === "income")
@@ -412,7 +802,7 @@ const api = async (path, opts = {}) => {
         ? new Date(`${data.occurred_at}T12:00:00`)
         : new Date();
       const transaction = {
-        id: nextId(store.transactions),
+        id: nextId(),
         business_id: id,
         type: data.type,
         category,
@@ -477,7 +867,7 @@ const api = async (path, opts = {}) => {
           "Sell price must be a valid number greater than or equal to zero.",
         );
       const product = {
-        id: nextId(store.products),
+        id: nextId(),
         business_id: id,
         name,
         category: String(data.category || "").trim(),
@@ -490,7 +880,7 @@ const api = async (path, opts = {}) => {
       store.products.push(product);
       if (product.stock_qty)
         store.stockMovements.push({
-          id: nextId(store.stockMovements),
+          id: nextId(),
           business_id: id,
           product_id: product.id,
           change_qty: product.stock_qty,
@@ -501,10 +891,11 @@ const api = async (path, opts = {}) => {
     }
     return scoped(store.products).sort((a, b) => a.name.localeCompare(b.name));
   }
-  const stockMatch = route.match(/^\/products\/(\d+)\/stock$/);
+  const stockMatch = route.match(/^\/products\/([^/]+)\/stock$/);
   if (stockMatch) {
     const product = store.products.find(
-      (row) => row.id === Number(stockMatch[1]) && row.business_id === id,
+      (row) =>
+        String(row.id) === stockMatch[1] && String(row.business_id) === id,
     );
     if (!product) throw new Error("Product not found.");
     const delta = Number(data.delta);
@@ -515,7 +906,7 @@ const api = async (path, opts = {}) => {
       throw new Error("Stock adjustment would create an invalid stock value.");
     product.stock_qty = nextStock;
     store.stockMovements.push({
-      id: nextId(store.stockMovements),
+      id: nextId(),
       business_id: id,
       product_id: product.id,
       change_qty: delta,
@@ -529,9 +920,9 @@ const api = async (path, opts = {}) => {
   if (route === "/market-prices") {
     if (method === "POST") {
       store.marketPrices.push({
-        id: nextId(store.marketPrices),
+        id: nextId(),
         business_id: id,
-        product_id: Number(data.product_id),
+        product_id: data.product_id,
         supplier_name: String(data.supplier_name || "Manual entry"),
         supplier_price: Number(data.supplier_price),
         market_price: Number(data.market_price),
@@ -543,7 +934,7 @@ const api = async (path, opts = {}) => {
     return scoped(store.products)
       .map((product) => {
         const history = scoped(store.marketPrices)
-          .filter((row) => row.product_id === product.id)
+          .filter((row) => String(row.product_id) === String(product.id))
           .sort((a, b) => a.recorded_at.localeCompare(b.recorded_at));
         if (!history.length) return null;
         const latest = history.at(-1);
@@ -574,7 +965,7 @@ const api = async (path, opts = {}) => {
       );
       if (!customer) {
         customer = {
-          id: nextId(store.customers),
+          id: nextId(),
           business_id: id,
           name: customerName,
         };
@@ -599,7 +990,7 @@ const api = async (path, opts = {}) => {
         ? new Date(`${data.occurred_at}T12:00:00`)
         : new Date();
       const invoice = {
-        id: nextId(store.invoices),
+        id: nextId(),
         business_id: id,
         customer_id: customer.id,
         product_id: product ? product.id : null,
@@ -619,7 +1010,7 @@ const api = async (path, opts = {}) => {
       store.invoices.push(invoice);
       if (product) {
         store.stockMovements.push({
-          id: nextId(store.stockMovements),
+          id: nextId(),
           business_id: id,
           product_id: product.id,
           change_qty: -qty,
@@ -628,7 +1019,7 @@ const api = async (path, opts = {}) => {
       }
       if (invoice.status === "paid")
         store.transactions.push({
-          id: nextId(store.transactions),
+          id: nextId(),
           business_id: id,
           type: "income",
           category: "Sales",
@@ -643,26 +1034,29 @@ const api = async (path, opts = {}) => {
       .map((invoice) => ({
         ...invoice,
         customer_name:
-          store.customers.find((row) => row.id === invoice.customer_id)?.name ||
-          "Customer",
+          store.customers.find(
+            (row) => String(row.id) === String(invoice.customer_id),
+          )?.name || "Customer",
         product_name:
           invoice.product_name ||
-          store.products.find((row) => row.id === invoice.product_id)?.name ||
+          store.products.find(
+            (row) => String(row.id) === String(invoice.product_id),
+          )?.name ||
           "Product",
         total: invoice.qty * invoice.unit_price,
       }))
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
-  const paidMatch = route.match(/^\/invoices\/(\d+)\/mark-paid$/);
+  const paidMatch = route.match(/^\/invoices\/([^/]+)\/mark-paid$/);
   if (paidMatch) {
     const invoice = scoped(store.invoices).find(
-      (row) => row.id === Number(paidMatch[1]),
+      (row) => String(row.id) === paidMatch[1],
     );
     if (!invoice) throw new Error("Invoice not found.");
     if (invoice.status !== "paid") {
       invoice.status = "paid";
       store.transactions.push({
-        id: nextId(store.transactions),
+        id: nextId(),
         business_id: id,
         type: "income",
         category: "Sales",
@@ -693,7 +1087,9 @@ const api = async (path, opts = {}) => {
     );
     const top = Object.values(
       invoices.reduce((result, invoice) => {
-        const product = products.find((row) => row.id === invoice.product_id);
+        const product = products.find(
+          (row) => String(row.id) === String(invoice.product_id),
+        );
         const item = result[invoice.product_id] || {
           name: product?.name || "Product",
           qty_sold: 0,
@@ -1049,8 +1445,35 @@ const showAuthPanel = (signup) => {
   authMessage();
 };
 const beginSession = async (account, key) => {
-  activeUser = { id: account.id, key, salt: account.salt };
+  activeUser = {
+    id: account.id,
+    key,
+    salt: account.salt,
+    email: account.email || "",
+    session: account.session || null,
+  };
   activePlan = account.plan || "";
+  const savedLocal = await localWorkspace(account.id);
+  await saveLocalWorkspace({
+    ...(savedLocal || {}),
+    user_id: account.id,
+    email: account.email || savedLocal?.email || "",
+    salt: account.salt,
+    cachedKey: key,
+    plan: activePlan || savedLocal?.plan || "",
+  });
+  activePlan ||= savedLocal?.plan || "";
+  resetInactivityTimer();
+  setSyncStatus(
+    savedLocal?.unsynced
+      ? navigator.onLine
+        ? "pending"
+        : "offline"
+      : savedLocal?.last_synced_at
+        ? "synced"
+        : "none",
+    savedLocal?.last_synced_at,
+  );
   const businessKey = getBusinessStorageKey(account.id);
   currentBusinessId =
     localStorage.getItem(businessKey) ||
@@ -1066,11 +1489,24 @@ const beginSession = async (account, key) => {
       PLAN_CONFIG[activePlan]?.name || "BizTrack Basic";
     updatePlanUI();
     await loadBusinesses();
+    resetInactivityTimer();
+    syncWorkspace();
   } else {
     document.querySelector(".app").classList.add("hidden");
     document.getElementById("plan-screen").classList.remove("hidden");
     showPlanSelection();
   }
+};
+const openWorkspaceFromLocal = async () => {
+  document.getElementById("lock-screen").classList.add("hidden");
+  document.getElementById("auth-screen").classList.add("hidden");
+  document.getElementById("plan-screen").classList.add("hidden");
+  document.querySelector(".app").classList.remove("hidden");
+  document.getElementById("account-plan").textContent =
+    PLAN_CONFIG[activePlan]?.name || "BizTrack Basic";
+  updatePlanUI();
+  await loadBusinesses();
+  resetInactivityTimer();
 };
 const showPlanSelection = () => {
   if (!document.getElementById("plan-screen")) return;
@@ -1131,6 +1567,8 @@ document
         "Use a valid email and a password with at least 10 characters.",
       );
     try {
+      if (!navigator.onLine)
+        throw new Error("Connect to the internet for first-time signup.");
       if (!supabaseClient) throw new Error("Supabase is not configured.");
       const salt = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
       const { key } = await deriveKey(password, salt);
@@ -1138,7 +1576,7 @@ document
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/`,
+          emailRedirectTo: new URL("./", window.location.href).href,
           data: { name: String(values.name).trim(), salt },
         },
       });
@@ -1165,9 +1603,28 @@ document
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.currentTarget));
     try {
+      const email = String(values.email).trim().toLowerCase();
+      if (!navigator.onLine) {
+        const known = await findLocalAccount(email);
+        if (!known)
+          throw new Error("First-time login requires an internet connection.");
+        const { key } = await deriveKey(String(values.password), known.salt);
+        try {
+          if (known.encrypted_data)
+            await decryptPayload(known.encrypted_data, key);
+        } catch {
+          throw new Error("Wrong password.");
+        }
+        await beginSession(
+          { ...known, id: known.user_id, plan: known.plan || "" },
+          key,
+        );
+        await openWorkspaceFromLocal();
+        return;
+      }
       if (!supabaseClient) throw new Error("Supabase is not configured.");
       const { data, error } = await supabaseClient.auth.signInWithPassword({
-        email: String(values.email).trim().toLowerCase(),
+        email,
         password: String(values.password),
       });
       if (error) throw error;
@@ -1192,7 +1649,9 @@ document
         email: data.user.email,
         salt,
         plan: profile?.subscription_plan || "",
+        session: data.session,
       };
+      syncNeedsLogin = false;
       await saveProfile({
         id: data.user.id,
         email: data.user.email,
@@ -1201,6 +1660,33 @@ document
       await beginSession(account, key);
       if (!workspace) await writeStore(emptyStore());
     } catch (error) {
+      const email = String(values.email || "")
+        .trim()
+        .toLowerCase();
+      const isNetworkFailure =
+        error?.name === "AuthRetryableFetchError" ||
+        error?.name === "TypeError" ||
+        /failed to fetch|network request failed/i.test(error?.message || "");
+      if (navigator.onLine && email && isNetworkFailure) {
+        try {
+          const known = await findLocalAccount(email);
+          if (known?.encrypted_data) {
+            const { key } = await deriveKey(
+              String(values.password),
+              known.salt,
+            );
+            await decryptPayload(known.encrypted_data, key);
+            await beginSession(
+              { ...known, id: known.user_id, plan: known.plan || "" },
+              key,
+            );
+            await openWorkspaceFromLocal();
+            return;
+          }
+        } catch {
+          // Keep the normal auth error when no local key can unlock the cache.
+        }
+      }
       showAuthError(
         error,
         "Incorrect email or password, or private data could not be unlocked.",
@@ -1208,10 +1694,67 @@ document
     }
   });
 
+document
+  .getElementById("unlock-form")
+  .addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const password = String(
+      new FormData(event.currentTarget).get("password") || "",
+    );
+    const message = document.getElementById("unlock-message");
+    try {
+      const account = await findLocalAccount(lockedAccount?.email || "");
+      if (!account)
+        throw new Error("No offline workspace is saved on this device.");
+      const { key } = await deriveKey(password, account.salt);
+      if (account.encrypted_data)
+        await decryptPayload(account.encrypted_data, key);
+      await beginSession({ ...account, id: account.user_id }, key);
+      await openWorkspaceFromLocal();
+      event.currentTarget.reset();
+    } catch (error) {
+      message.textContent =
+        error.message === "No offline workspace is saved on this device."
+          ? error.message
+          : "Wrong password.";
+    }
+  });
+
+let lockedAccount = null;
+let inactivityTimer;
+const INACTIVITY_LOCK_MS = 30 * 60 * 1000;
+const resetInactivityTimer = () => {
+  clearTimeout(inactivityTimer);
+  if (
+    !activeUser ||
+    document.querySelector(".app")?.classList.contains("hidden")
+  )
+    return;
+  inactivityTimer = setTimeout(async () => {
+    if (!activeUser) return;
+    lockedAccount = {
+      id: activeUser.id,
+      email: activeUser.email,
+      salt: activeUser.salt,
+    };
+    activeUser = null;
+    document.querySelector(".app").classList.add("hidden");
+    document.getElementById("lock-account-email").textContent =
+      lockedAccount.email || "Enter your password to unlock this device.";
+    document.getElementById("unlock-message").textContent = "";
+    document.getElementById("lock-screen").classList.remove("hidden");
+    document.getElementById("unlock-password").focus();
+  }, INACTIVITY_LOCK_MS);
+};
+["pointerdown", "keydown", "touchstart", "click"].forEach((eventName) =>
+  document.addEventListener(eventName, resetInactivityTimer, { passive: true }),
+);
+
 document.querySelectorAll(".plan-choice").forEach((button) => {
   button.addEventListener("click", async () => {
     const plan = button.dataset.plan;
     try {
+      if (!activeUser) throw new Error("Unlock your workspace first.");
       await updateSubscription(plan);
       document.getElementById("plan-screen").classList.add("hidden");
       document.querySelector(".app").classList.remove("hidden");
@@ -1229,16 +1772,39 @@ document
   .getElementById("change-plan-link")
   ?.addEventListener("click", (event) => {
     event.preventDefault();
-    if (supabaseClient && activeUser) {
+    if (activeUser) {
       document.querySelector(".app").classList.add("hidden");
       document.getElementById("plan-screen").classList.remove("hidden");
       showPlanSelection();
     }
   });
 document.getElementById("logout-button").addEventListener("click", async () => {
+  const current = activeUser ? await localWorkspace(activeUser.id) : null;
+  if (current?.unsynced) {
+    const shouldSync = window.confirm(
+      "There are unsynced changes. Sync before logging out? Cancel to stay signed in.",
+    );
+    if (!shouldSync) return;
+    await syncWorkspace();
+    const afterSync = await localWorkspace(activeUser.id);
+    if (afterSync?.unsynced) {
+      const logOutWithLocalCopy = window.confirm(
+        "Sync is unavailable. Log out and keep the unsynced encrypted data on this device?",
+      );
+      if (!logOutWithLocalCopy) return;
+    }
+  }
+  const latest = activeUser ? await localWorkspace(activeUser.id) : null;
+  const removeDeviceData = latest?.unsynced
+    ? false
+    : window.confirm(
+        "Remove this device's offline data? Choose Cancel to keep offline access.",
+      );
   try {
-    if (supabaseClient) await supabaseClient.auth.signOut();
+    if (navigator.onLine && supabaseClient) await supabaseClient.auth.signOut();
   } finally {
+    if (removeDeviceData && activeUser)
+      await removeLocalWorkspace(activeUser.id);
     activeUser = null;
     activePlan = "";
     currentBusinessId = "";
@@ -1345,13 +1911,62 @@ async function loadNews() {
     return;
   }
   lockPanel?.classList.add("hidden");
+  const cacheKey = "biztrack-news-cache-v1";
+  const saved = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(cacheKey) || "null");
+    } catch {
+      return null;
+    }
+  })();
+  let response = null;
+  let offlineNotice = !navigator.onLine;
+  if (navigator.onLine && supabaseClient) {
+    try {
+      const { data } = await supabaseClient.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Login is required to refresh news.");
+      const result = await fetch(`${supabaseConfig.url}/functions/v1/news`, {
+        headers: {
+          apikey: supabaseConfig.anonKey,
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!result.ok) throw new Error("News could not be refreshed.");
+      response = await result.json();
+      if (!Array.isArray(response.items))
+        throw new Error("News response was invalid.");
+      response.savedAt = new Date().toISOString();
+      localStorage.setItem(cacheKey, JSON.stringify(response));
+    } catch (error) {
+      console.warn("News refresh failed:", error);
+      offlineNotice = false;
+    }
+  }
+  const displayed = response || saved;
+  const savedLabel = displayed?.savedAt
+    ? formatLocalDate(displayed.savedAt) +
+      " " +
+      new Date(displayed.savedAt).toLocaleTimeString([], {
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : "";
+  const notice = response
+    ? ""
+    : displayed
+      ? `<p class="news-cache-note">Showing saved news from ${escapeHtml(savedLabel)}${offlineNotice ? " — you're offline" : " — refresh failed"}</p>`
+      : `<div class="empty">${offlineNotice ? "News needs an internet connection. No saved headlines are available yet." : "News could not be loaded. Try again when connected."}</div>`;
+  const items = displayed?.items || [];
   container.innerHTML = `
     <div class="card">
       <div class="section-title">Latest business news</div>
-      <div class="empty">News is configured server-side via the Supabase Edge Function. Deploy the function and refresh here to show live RSS items.</div>
+      ${notice}
+      ${items.length ? `<div class="news-items">${items.map((item) => `<article class="news-item"><a href="${escapeHtml(item.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a><div class="news-meta">${escapeHtml(item.source || "News")} · ${formatLocalDate(item.published)}</div><p>${escapeHtml(item.summary || "")}</p></article>`).join("")}</div>` : ""}
     </div>
   `;
 }
+document.getElementById("news-refresh")?.addEventListener("click", loadNews);
 
 async function loadOverallProfitLoss() {
   try {
@@ -1532,8 +2147,8 @@ async function loadInventory() {
     <td data-label="Stock"><span class="pill ${statusClass}">${p.stock_qty} ${escapeHtml(p.unit || "unit")}</span><div class="sub">${status}</div></td>
     <td data-label="Reorder Level">${p.stock_qty <= LOW_STOCK_THRESHOLD ? LOW_STOCK_THRESHOLD : "—"}</td><td data-label="Cost Price">${fmt(p.cost_price)}</td><td data-label="Sell Price">${fmt(p.sell_price)}</td>
     <td data-label="Adjust" class="row-actions">
-      <button class="btn small secondary" onclick="adjustStock(${p.id}, 10)">+10</button>
-      <button class="btn small secondary" onclick="adjustStock(${p.id}, -10)">-10</button>
+      <button class="btn small secondary" onclick="adjustStock('${escapeHtml(p.id)}', 10)">+10</button>
+      <button class="btn small secondary" onclick="adjustStock('${escapeHtml(p.id)}', -10)">-10</button>
     </td></tr>`;
     })
     .join("");
@@ -1679,7 +2294,7 @@ async function loadSales() {
     <td data-label="Date">${formatLocalDate(i.created_at)}</td><td data-label="Customer">${escapeHtml(i.customer_name)}</td><td data-label="Product">${escapeHtml(i.product_name)}</td>
     <td data-label="Qty">${i.qty}</td><td data-label="Price">${fmt(i.unit_price)}</td><td data-label="Total">${fmt(i.total)}</td>
     <td data-label="Status"><span class="pill ${i.status}">${escapeHtml(i.status)}</span></td>
-    <td data-label="Actions" class="row-actions">${i.status === "unpaid" ? `<button class="btn small secondary" onclick="markPaid(${i.id})">Mark Paid</button>` : ""}</td>
+    <td data-label="Actions" class="row-actions">${i.status === "unpaid" ? `<button class="btn small secondary" onclick="markPaid('${escapeHtml(i.id)}')">Mark Paid</button>` : ""}</td>
     </tr>`,
     )
     .join("");
@@ -1741,3 +2356,39 @@ document
   });
 
 // The app starts at Businesses. Select a business, then choose a feature manually.
+if ("serviceWorker" in navigator) {
+  let reloadAfterUpdate = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloadAfterUpdate) window.location.reload();
+  });
+  const showWaitingUpdate = (registration) => {
+    if (!registration.waiting || !navigator.serviceWorker.controller) return;
+    clearTimeout(showToast.timer);
+    const toast = document.getElementById("toast");
+    toast.replaceChildren(document.createTextNode("New version available — "));
+    const reloadButton = document.createElement("button");
+    reloadButton.type = "button";
+    reloadButton.className = "btn small update-reload";
+    reloadButton.textContent = "Reload";
+    reloadButton.addEventListener("click", () => {
+      reloadAfterUpdate = true;
+      registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+    });
+    toast.append(reloadButton);
+    toast.className = "toast show update-toast";
+  };
+  navigator.serviceWorker
+    .register("./sw.js", { scope: "./", updateViaCache: "none" })
+    .then((registration) => {
+      showWaitingUpdate(registration);
+      registration.addEventListener("updatefound", () => {
+        const worker = registration.installing;
+        worker?.addEventListener("statechange", () => {
+          if (worker.state === "installed") showWaitingUpdate(registration);
+        });
+      });
+    })
+    .catch((error) =>
+      console.warn("Service worker registration failed:", error),
+    );
+}
