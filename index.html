@@ -698,6 +698,7 @@
                 ><input
                   name="customer_name"
                   id="invoice-customer-text"
+                  list="customer-names"
                   placeholder="Customer name"
                   required
                 />
@@ -746,6 +747,7 @@
                 </select>
               </div>
             </form>
+            <datalist id="customer-names"></datalist>
             <datalist id="inventory-product-names"></datalist>
             <button class="btn" id="invoice-submit" style="margin-top: 12px">
               Create Invoice
@@ -786,6 +788,6 @@
     </div>
     <script src="./static/vendor/supabase-2.56.0.min.js" defer></script>
     <script src="static/supabase-config.js" defer></script>
-    <script src="static/app.js?v=24" defer></script>
+    <script src="static/app.js?v=25" defer></script>
   </body>
 </html>

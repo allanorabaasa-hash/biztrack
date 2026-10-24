@@ -747,7 +747,8 @@ const api = async (path, opts = {}) => {
       if (
         store.businesses.some(
           (row) =>
-            row.id !== id && row.name.toLowerCase() === name.toLowerCase(),
+            String(row.id) !== String(id) &&
+            row.name.toLowerCase() === name.toLowerCase(),
         )
       )
         throw new Error("A business with that name already exists.");
@@ -2285,14 +2286,11 @@ let customersCache = [];
 async function loadSales() {
   await refreshProductsCache();
   customersCache = await api("/customers");
-  document.getElementById("invoice-customer-select").innerHTML = customersCache
+  document.getElementById("customer-names").innerHTML = customersCache
     .map((c) => `<option value="${c.id}">${c.name}</option>`)
     .join("");
-  document.getElementById("invoice-product-select").innerHTML = productsCache
-    .map(
-      (p) =>
-        `<option value="${p.id}">${p.name} (${fmt(p.sell_price)})</option>`,
-    )
+  document.getElementById("inventory-product-names").innerHTML = productsCache
+    .map((product) => `<option value="${escapeHtml(product.name)}"></option>`)
     .join("");
 
   const invoices = await api("/invoices");
