@@ -120,3 +120,41 @@ python3 -m http.server 8000
 ```
 
 Then open `http://localhost:8000` in the browser.
+
+## Android app
+
+BizTrack uses Capacitor 8.5.3 with the static site copied to `www/`. The build copies Capacitor's browser plugin bundles and inserts their script tags into `www/index.html` only, so the GitHub Pages site continues to use the root web files without loading native plugins. Android launcher and splash assets are generated from `static/icons/icon-512.png` using `@capacitor/assets`.
+
+From the project root, install dependencies, build the web directory, and synchronize the Android project:
+
+```bash
+npm install
+npm run build
+npx cap sync android
+npx cap open android
+```
+
+The Android project is committed in `android/`. When setting up the project for the first time, add Android once before syncing:
+
+```bash
+npx cap add android
+```
+
+Generate the Android launcher icons and splash screen from the existing BizTrack icon after adding Android:
+
+```bash
+mkdir -p assets
+cp static/icons/icon-512.png assets/icon.png
+npx @capacitor/assets generate --android --assetPath assets --iconBackgroundColor '#0b4f4a' --splashBackgroundColor '#0b4f4a'
+```
+
+Then run `npx cap sync android` again to copy the generated native resources. To build a debug APK from the project root, use:
+
+```bash
+cd android
+./gradlew assembleDebug
+```
+
+The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. Alternatively, open Android Studio with `npx cap open android` and select **Build > Build Bundle(s) / APK(s) > Build APK(s)**.
+
+Password-reset emails should continue redirecting to the GitHub Pages reset page; keep that URL in Supabase Authentication's Redirect URLs. Deep-linking back into the app can be added later by configuring an Android App Link or custom URL scheme and intent filter, handling the incoming URL with Capacitor's App `appUrlOpen` / `getLaunchUrl` APIs, and adding that app URL to Supabase's Redirect URLs.

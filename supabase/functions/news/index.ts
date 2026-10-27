@@ -20,22 +20,22 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 const cache = new Map<string, { expiresAt: number; data: any }>();
 const allowedOrigins = [
   "https://allanorabaasa-hash.github.io",
+  "https://localhost",
+  "capacitor://localhost",
   "http://localhost:8000",
   "http://localhost:8080",
   "http://127.0.0.1:8000",
   "http://127.0.0.1:8080",
 ];
 
-const withCors = (response: Response) => {
-  const origin = response.headers.get("Access-Control-Allow-Origin");
-  if (!origin) {
-    response.headers.set("Access-Control-Allow-Origin", "*");
+const withCors = (response: Response, origin: string) => {
+  if (allowedOrigins.includes(origin)) {
+    response.headers.set("Access-Control-Allow-Origin", origin);
   }
   response.headers.set("Access-Control-Allow-Headers", "authorization, x-client-info, apikey, content-type");
   response.headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
   return response;
 };
-
 const stripHtml = (value: string) =>
   String(value || "")
     .replace(/<[^>]+>/g, " ")
@@ -128,7 +128,7 @@ Deno.serve(async (req: Request) => {
     return new Response(null, {
       status: 204,
       headers: {
-        "Access-Control-Allow-Origin": allowedOrigin ? origin || "*" : "*",
+        ...(allowedOrigin ? { "Access-Control-Allow-Origin": origin || "*" } : {}),
         "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
       },
@@ -136,19 +136,19 @@ Deno.serve(async (req: Request) => {
   }
 
   if (method !== "GET") {
-    return withCors(new Response(JSON.stringify({ error: "Method not allowed." }), { status: 405, headers: { "Content-Type": "application/json" } }));
+    return withCors(new Response(JSON.stringify({ error: "Method not allowed." }), { status: 405, headers: { "Content-Type": "application/json" } }), origin);
   }
 
   const authHeader = req.headers.get("Authorization") || "";
   const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
   if (!bearerToken) {
-    return withCors(new Response(JSON.stringify({ error: "Authenticated Supabase user required." }), { status: 401, headers: { "Content-Type": "application/json" } }));
+    return withCors(new Response(JSON.stringify({ error: "Authenticated Supabase user required." }), { status: 401, headers: { "Content-Type": "application/json" } }), origin);
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const supabaseAnonKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_ANON_KEY");
   if (!supabaseUrl || !supabaseAnonKey) {
-    return withCors(new Response(JSON.stringify({ error: "Supabase Edge environment variables are missing." }), { status: 500, headers: { "Content-Type": "application/json" } }));
+    return withCors(new Response(JSON.stringify({ error: "Supabase Edge environment variables are missing." }), { status: 500, headers: { "Content-Type": "application/json" } }), origin);
   }
 
   const supabase = createClient(supabaseUrl, supabaseAnonKey, {
@@ -156,22 +156,22 @@ Deno.serve(async (req: Request) => {
   });
   const { data: { user }, error } = await supabase.auth.getUser(bearerToken);
   if (error || !user) {
-    return withCors(new Response(JSON.stringify({ error: "Your session is invalid or expired." }), { status: 401, headers: { "Content-Type": "application/json" } }));
+    return withCors(new Response(JSON.stringify({ error: "Your session is invalid or expired." }), { status: 401, headers: { "Content-Type": "application/json" } }), origin);
   }
 
   const cacheKey = "news-feed-cache";
   const cached = cache.get(cacheKey);
   const now = Date.now();
   if (cached && cached.expiresAt > now) {
-    return withCors(new Response(JSON.stringify(cached.data), { headers: { "Content-Type": "application/json" } }));
+    return withCors(new Response(JSON.stringify(cached.data), { headers: { "Content-Type": "application/json" } }), origin);
   }
 
   try {
     const items = await fetchFeedEntries();
     const payload = { items: items.slice(0, 60), generatedAt: new Date().toISOString() };
     cache.set(cacheKey, { expiresAt: now + CACHE_TTL_MS, data: payload });
-    return withCors(new Response(JSON.stringify(payload), { headers: { "Content-Type": "application/json" } }));
+    return withCors(new Response(JSON.stringify(payload), { headers: { "Content-Type": "application/json" } }), origin);
   } catch (error) {
-    return withCors(new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Unable to load news right now." }), { status: 502, headers: { "Content-Type": "application/json" } }));
+    return withCors(new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Unable to load news right now." }), { status: 502, headers: { "Content-Type": "application/json" } }), origin);
   }
 });

@@ -1,0 +1,21 @@
+{
+  "name": "biztrack",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BizTrack static web app and Capacitor Android wrapper",
+  "scripts": {
+    "build": "node scripts/build.js"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/network": "8.0.1",
+    "@capacitor/splash-screen": "8.0.2",
+    "@capacitor/status-bar": "8.0.4"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "8.5.3"
+  }
+}

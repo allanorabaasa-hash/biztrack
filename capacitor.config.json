@@ -1,0 +1,19 @@
+{
+  "appId": "com.allanorabaasa.biztrack",
+  "appName": "BizTrack",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "plugins": {
+    "StatusBar": {
+      "backgroundColor": "#0b4f4a",
+      "style": "LIGHT",
+      "overlaysWebView": false
+    },
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#0b4f4a",
+      "showSpinner": false,
+      "androidScaleType": "CENTER_CROP"
+    }
+  }
+}

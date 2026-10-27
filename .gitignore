@@ -3,3 +3,14 @@ biztrack_translation_cache.db
 __pycache__/
 *.pyc
 .DS_Store
+node_modules/
+www/
+android/.gradle/
+android/**/build/
+android/build/
+android/app/build/
+android/.idea/
+android/local.properties
+android/captures/
+android/.externalNativeBuild/
+android/.cxx/

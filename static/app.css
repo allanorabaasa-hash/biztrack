@@ -467,7 +467,7 @@ h3,
   }
   .main {
     max-width: none;
-    padding: 16px;
+    padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
   }
   .grid-4 {
     grid-template-columns: repeat(2, 1fr);
@@ -479,7 +479,7 @@ h3,
   .sidebar {
     position: fixed;
     z-index: 31;
-    inset: 0 auto 0 0;
+    inset: env(safe-area-inset-top) auto env(safe-area-inset-bottom) 0;
     width: min(280px, 82vw);
     height: 100vh;
     height: 100dvh;
@@ -525,8 +525,8 @@ h3,
     align-items: center;
     gap: 12px;
     width: 100%;
-    height: 56px;
-    padding: 0 14px;
+    height: calc(56px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 14px 0;
     border-bottom: 1px solid var(--line);
     background: rgba(255, 255, 255, 0.96);
     box-shadow: 0 3px 12px rgba(18, 32, 30, 0.06);
