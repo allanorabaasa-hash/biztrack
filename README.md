@@ -2,72 +2,20 @@
 
 BizTrack is a static HTML/CSS/JS business accounting app that stores encrypted workspace data in Supabase Postgres and uses Supabase Auth for login.
 
-## Supabase SQL to run
+## Supabase schema and migrations
 
-Run the following in the Supabase SQL Editor in order:
+For an existing project, run every new file in [supabase/migrations](supabase/migrations/) in filename order in the Supabase SQL Editor. After applying the migrations, refresh the API schema cache:
 
 ```sql
-create table if not exists public.biztrack_workspaces (
-  user_id uuid primary key references auth.users(id) on delete cascade,
-  salt text not null,
-  encrypted_data text not null,
-  data_key_wrapped text,
-  recovery_key_wrapped text,
-  updated_at timestamptz not null default now()
-);
-
-create table if not exists public.biztrack_profiles (
-  user_id uuid primary key references auth.users(id) on delete cascade,
-  email text not null,
-  name text not null,
-  subscription_plan text,
-  payment_method text,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-alter table public.biztrack_profiles
-  add column if not exists subscription_plan text,
-  add column if not exists payment_method text;
-
-alter table public.biztrack_workspaces
-  add column if not exists data_key_wrapped text,
-  add column if not exists recovery_key_wrapped text;
-
-alter table public.biztrack_workspaces enable row level security;
-alter table public.biztrack_profiles enable row level security;
-
-create policy "Users can read their own profile"
-  on public.biztrack_profiles for select
-  using (auth.uid() = user_id);
-
-create policy "Users can create their own profile"
-  on public.biztrack_profiles for insert
-  with check (auth.uid() = user_id);
-
-create policy "Users can update their own profile"
-  on public.biztrack_profiles for update
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
-
-create policy "Users can read their own workspace"
-  on public.biztrack_workspaces for select
-  using (auth.uid() = user_id);
-
-create policy "Users can create their own workspace"
-  on public.biztrack_workspaces for insert
-  with check (auth.uid() = user_id);
-
-create policy "Users can update their own workspace"
-  on public.biztrack_workspaces for update
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+notify pgrst, 'reload schema';
 ```
+
+For a fresh install, run the full current schema in [supabase-schema.sql](supabase-schema.sql) instead. It is idempotent and can be re-run safely. Keep this full schema current alongside the incremental migration files.
 
 ## Setup steps
 
 1. Create a Supabase project.
-2. In Supabase SQL Editor, run [supabase-schema.sql](supabase-schema.sql).
+2. In Supabase SQL Editor, run [supabase-schema.sql](supabase-schema.sql) for a fresh project, or apply the migration files in order for an existing project, then run `notify pgrst, 'reload schema';`.
 3. Copy your project URL and anon key into [static/supabase-config.js](static/supabase-config.js).
 4. In Supabase Authentication > Providers > Email, disable Confirm email during development so signup/login works immediately.
 5. In Authentication > URL Configuration, set the Site URL to your local or deployed URL (for example `http://localhost:8000`) and add the same URL to Redirect URLs.

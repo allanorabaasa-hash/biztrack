@@ -28,27 +28,33 @@ alter table public.biztrack_workspaces
 alter table public.biztrack_workspaces enable row level security;
 alter table public.biztrack_profiles enable row level security;
 
+drop policy if exists "Users can read their own profile" on public.biztrack_profiles;
 create policy "Users can read their own profile"
   on public.biztrack_profiles for select
   using (auth.uid() = user_id);
 
+drop policy if exists "Users can create their own profile" on public.biztrack_profiles;
 create policy "Users can create their own profile"
   on public.biztrack_profiles for insert
   with check (auth.uid() = user_id);
 
+drop policy if exists "Users can update their own profile" on public.biztrack_profiles;
 create policy "Users can update their own profile"
   on public.biztrack_profiles for update
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
+drop policy if exists "Users can read their own workspace" on public.biztrack_workspaces;
 create policy "Users can read their own workspace"
   on public.biztrack_workspaces for select
   using (auth.uid() = user_id);
 
+drop policy if exists "Users can create their own workspace" on public.biztrack_workspaces;
 create policy "Users can create their own workspace"
   on public.biztrack_workspaces for insert
   with check (auth.uid() = user_id);
 
+drop policy if exists "Users can update their own workspace" on public.biztrack_workspaces;
 create policy "Users can update their own workspace"
   on public.biztrack_workspaces for update
   using (auth.uid() = user_id)
