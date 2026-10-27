@@ -1,4 +1,6 @@
 const LOW_STOCK_THRESHOLD = 5;
+const capacitor = window.Capacitor;
+const isNativeApp = Boolean(capacitor?.isNativePlatform?.());
 const PLAN_CONFIG = {
   basic: {
     id: "basic",
@@ -443,7 +445,10 @@ const setSyncStatus = (state, lastSyncedAt = null) => {
     none: "Not synced",
   };
   const time = lastSyncedAt
-    ? ` · ${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(lastSyncedAt))}`
+    ? ` · ${new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(lastSyncedAt))}`
     : "";
   ["sync-status", "mobile-sync-status"].forEach((id) => {
     const element = document.getElementById(id);
@@ -456,6 +461,15 @@ const setSyncStatus = (state, lastSyncedAt = null) => {
 const queueWorkspaceSync = () => {
   clearTimeout(syncTimer);
   syncTimer = setTimeout(() => syncWorkspace(), 3000);
+};
+const requireMatchingAuthSession = async (userId) => {
+  const { data, error } = await supabaseClient.auth.getSession();
+  if (error) throw error;
+  if (data.session?.user?.id !== userId) {
+    const authError = new Error("Log in to sync this account.");
+    authError.status = 401;
+    throw authError;
+  }
 };
 const recordTime = (record) =>
   record.updated_at ||
@@ -518,7 +532,7 @@ const mergeWorkspaces = (local, remote) => {
     );
     merged[collection] = [...records.values()].filter((record) => {
       const deletion = deletions.get(String(record.id));
-      return !deletion;
+      return !deletion || recordTime(record) > deletion.deleted_at;
     });
   });
   return merged;
@@ -647,6 +661,7 @@ const syncWorkspace = async () => {
   let attemptedCiphertext = null;
   let failed = false;
   try {
+    await requireMatchingAuthSession(userId);
     let local = await localWorkspace(userId);
     if (!local?.encrypted_data) return;
     let planSyncedAt = null;
@@ -880,6 +895,15 @@ window.addEventListener("online", async () => {
     await syncWorkspace();
   }
 });
+const syncAfterResume = async () => {
+  if (!activeUser || !supabaseClient) return;
+  try {
+    await supabaseClient.auth.refreshSession();
+  } catch {
+    // Local work remains available when the cached server session expires.
+  }
+  await syncWorkspace();
+};
 window.addEventListener("offline", async () => {
   const local = activeUser ? await localWorkspace(activeUser.id) : null;
   setSyncStatus("offline", local?.last_synced_at);
@@ -986,8 +1010,8 @@ const reportRange = (params) => {
       period === "daily"
         ? "Today"
         : period === "weekly"
-          ? "Last 7 days"
-          : "Last 30 days",
+        ? "Last 7 days"
+        : "Last 30 days",
   };
 };
 const inRange = (value, range) => {
@@ -1469,7 +1493,10 @@ const reportQuery = () => {
 };
 const setDefaultDateInputs = () => {
   const today = new Date();
-  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(
+    2,
+    "0",
+  )}-${String(today.getDate()).padStart(2, "0")}`;
   document.querySelectorAll('input[name="occurred_at"]').forEach((input) => {
     if (!input.value) input.value = iso;
   });
@@ -1520,6 +1547,8 @@ const mobileMenuButton = document.querySelector(".mobile-menu-btn");
 const sidebar = document.querySelector(".sidebar");
 const drawerBackdrop = document.querySelector(".drawer-backdrop");
 const mobilePageTitle = document.getElementById("mobile-page-title");
+let currentTab = "businesses";
+const tabHistory = [];
 const closeMobileMenu = () => {
   if (!sidebar?.classList.contains("open")) return;
   sidebar.classList.remove("open");
@@ -1536,7 +1565,7 @@ const openMobileMenu = () => {
   mobileMenuButton?.setAttribute("aria-label", "Close menu");
   sidebar.querySelector(".nav-item:not([hidden])")?.focus();
 };
-const activateTab = (tab) => {
+const activateTab = (tab, fromBackButton = false) => {
   if (!ensurePlanAccess(tab)) {
     const planName = PLAN_CONFIG[activePlan]?.name || "BizTrack Basic";
     showToast(`Available on ${planName} — Try for free`, true);
@@ -1556,6 +1585,11 @@ const activateTab = (tab) => {
     .forEach((item) => item.classList.add("hidden"));
   const target = document.getElementById(`tab-${tab}`);
   if (target) target.classList.remove("hidden");
+  if (isNativeApp && tab !== currentTab) {
+    if (fromBackButton) tabHistory.pop();
+    else tabHistory.push(currentTab);
+    currentTab = tab;
+  }
   if (mobilePageTitle) {
     const activeNav = document.querySelector(`.nav-item[data-tab="${tab}"]`);
     mobilePageTitle.textContent = activeNav?.textContent.trim() || "BizTrack";
@@ -1596,7 +1630,9 @@ const renderBusinesses = () => {
     businesses
       .map(
         (business) =>
-          `<option value="${business.id}">${escapeHtml(business.name)}</option>`,
+          `<option value="${business.id}">${escapeHtml(
+            business.name,
+          )}</option>`,
       )
       .join("");
   select.value = currentBusinessId;
@@ -1604,7 +1640,15 @@ const renderBusinesses = () => {
     ? businesses
         .map(
           (business) =>
-            `<button class="business-row${String(business.id) === String(currentBusinessId) ? " selected" : ""}" data-business-id="${business.id}"><strong>${escapeHtml(business.name)}</strong><span>${escapeHtml(business.business_type || "Business")}</span></button>`,
+            `<button class="business-row${
+              String(business.id) === String(currentBusinessId)
+                ? " selected"
+                : ""
+            }" data-business-id="${business.id}"><strong>${escapeHtml(
+              business.name,
+            )}</strong><span>${escapeHtml(
+              business.business_type || "Business",
+            )}</span></button>`,
         )
         .join("")
     : '<div class="empty">Add your first business to get started.</div>';
@@ -1689,7 +1733,9 @@ contextMenu.addEventListener("click", async (event) => {
   if (action === "delete") {
     if (
       !window.confirm(
-        `Delete ${business?.name || "this business"} and all of its records? This cannot be undone.`,
+        `Delete ${
+          business?.name || "this business"
+        } and all of its records? This cannot be undone.`,
       )
     )
       return;
@@ -1790,8 +1836,8 @@ const beginSession = async (account, key) => {
         ? "pending"
         : "offline"
       : savedLocal?.last_synced_at
-        ? "synced"
-        : "none",
+      ? "synced"
+      : "none",
     savedLocal?.last_synced_at,
   );
   const businessKey = getBusinessStorageKey(account.id);
@@ -1925,6 +1971,7 @@ document
   .getElementById("login-form")
   .addEventListener("submit", async (event) => {
     event.preventDefault();
+    authMessage();
     const values = Object.fromEntries(new FormData(event.currentTarget));
     try {
       const email = String(values.email).trim().toLowerCase();
@@ -2386,14 +2433,37 @@ async function loadNews() {
   const notice = response
     ? ""
     : displayed
-      ? `<p class="news-cache-note">Showing saved news from ${escapeHtml(savedLabel)}${offlineNotice ? " — you're offline" : " — refresh failed"}</p>`
-      : `<div class="empty">${offlineNotice ? "News needs an internet connection. No saved headlines are available yet." : "News could not be loaded. Try again when connected."}</div>`;
+    ? `<p class="news-cache-note">Showing saved news from ${escapeHtml(
+        savedLabel,
+      )}${offlineNotice ? " — you're offline" : " — refresh failed"}</p>`
+    : `<div class="empty">${
+        offlineNotice
+          ? "News needs an internet connection. No saved headlines are available yet."
+          : "News could not be loaded. Try again when connected."
+      }</div>`;
   const items = displayed?.items || [];
   container.innerHTML = `
     <div class="card">
       <div class="section-title">Latest business news</div>
       ${notice}
-      ${items.length ? `<div class="news-items">${items.map((item) => `<article class="news-item"><a href="${escapeHtml(item.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a><div class="news-meta">${escapeHtml(item.source || "News")} · ${formatLocalDate(item.published)}</div><p>${escapeHtml(item.summary || "")}</p></article>`).join("")}</div>` : ""}
+      ${
+        items.length
+          ? `<div class="news-items">${items
+              .map(
+                (item) =>
+                  `<article class="news-item"><a href="${escapeHtml(
+                    item.link,
+                  )}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+                    item.title,
+                  )}</a><div class="news-meta">${escapeHtml(
+                    item.source || "News",
+                  )} · ${formatLocalDate(item.published)}</div><p>${escapeHtml(
+                    item.summary || "",
+                  )}</p></article>`,
+              )
+              .join("")}</div>`
+          : ""
+      }
     </div>
   `;
 }
@@ -2416,7 +2486,15 @@ async function loadOverallProfitLoss() {
       ? report.businesses
           .map(
             (business) =>
-              `<tr><td data-label="Business">${escapeHtml(business.name)}</td><td data-label="Income" style="text-align:right">${fmt(business.income)}</td><td data-label="Expenses" style="text-align:right">${fmt(business.expenses)}</td><td data-label="Net profit / loss" style="text-align:right" class="${business.net_profit >= 0 ? "good" : "bad"}">${fmt(business.net_profit)}</td></tr>`,
+              `<tr><td data-label="Business">${escapeHtml(
+                business.name,
+              )}</td><td data-label="Income" style="text-align:right">${fmt(
+                business.income,
+              )}</td><td data-label="Expenses" style="text-align:right">${fmt(
+                business.expenses,
+              )}</td><td data-label="Net profit / loss" style="text-align:right" class="${
+                business.net_profit >= 0 ? "good" : "bad"
+              }">${fmt(business.net_profit)}</td></tr>`,
           )
           .join("")
       : '<tr><td colspan="4" class="empty">No businesses have been added yet.</td></tr>';
@@ -2429,17 +2507,22 @@ async function loadOverallProfitLoss() {
 async function loadDashboard() {
   const d = await api("/dashboard" + reportQuery());
   const period = uiText(d.period_label);
-  document.getElementById("d-sales-label").textContent =
-    `${period} ${uiText("Sales")}`;
-  document.getElementById("d-income-label").textContent =
-    `${period} ${uiText("Income")}`;
-  document.getElementById("d-expenses-label").textContent =
-    `${period} ${uiText("Expenses")}`;
-  document.getElementById("d-profit-label").textContent =
-    `${period} ${uiText("Net Profit")}`;
+  document.getElementById("d-sales-label").textContent = `${period} ${uiText(
+    "Sales",
+  )}`;
+  document.getElementById("d-income-label").textContent = `${period} ${uiText(
+    "Income",
+  )}`;
+  document.getElementById("d-expenses-label").textContent = `${period} ${uiText(
+    "Expenses",
+  )}`;
+  document.getElementById("d-profit-label").textContent = `${period} ${uiText(
+    "Net Profit",
+  )}`;
   document.getElementById("d-sales").textContent = fmt(d.sales_total);
-  document.getElementById("d-sales-units").textContent =
-    `${d.sales_units} ${uiText("items invoiced")}`;
+  document.getElementById("d-sales-units").textContent = `${
+    d.sales_units
+  } ${uiText("items invoiced")}`;
   document.getElementById("d-today-sales").textContent = fmt(d.today_sales);
   document.getElementById("d-today-expenses").textContent = fmt(
     d.today_expenses,
@@ -2450,8 +2533,9 @@ async function loadDashboard() {
   document.getElementById("d-outstanding").textContent = fmt(
     d.outstanding_invoices,
   );
-  document.getElementById("inventory-title").textContent =
-    `${uiText("Inventory")} — ${period}`;
+  document.getElementById("inventory-title").textContent = `${uiText(
+    "Inventory",
+  )} — ${period}`;
   document.getElementById("d-inventory-summary").innerHTML = `
           <span>Stock in<strong>${d.stock_in}</strong></span>
           <span>Stock out<strong>${d.stock_out}</strong></span>
@@ -2463,7 +2547,9 @@ async function loadDashboard() {
         .map(
           (p) =>
             `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px;">
-      <span>${escapeHtml(p.name)}</span><span class="pill low">${p.stock_qty} ${escapeHtml(p.unit || "unit")} ${uiText("left")}</span>
+      <span>${escapeHtml(p.name)}</span><span class="pill low">${
+              p.stock_qty
+            } ${escapeHtml(p.unit || "unit")} ${uiText("left")}</span>
     </div>`,
         )
         .join("")
@@ -2474,7 +2560,11 @@ async function loadDashboard() {
     d.top_products
       .map(
         (p) =>
-          `<tr><td data-label="Product">${escapeHtml(p.name)}</td><td data-label="Qty Sold">${p.qty_sold}</td><td data-label="Revenue">${fmt(p.revenue)}</td></tr>`,
+          `<tr><td data-label="Product">${escapeHtml(
+            p.name,
+          )}</td><td data-label="Qty Sold">${
+            p.qty_sold
+          }</td><td data-label="Revenue">${fmt(p.revenue)}</td></tr>`,
       )
       .join("") ||
     `<tr><td colspan="3" class="empty">${uiText("No sales yet.")}</td></tr>`;
@@ -2486,13 +2576,16 @@ async function loadAccounting() {
     api("/profit-loss" + reportQuery()),
     api("/transactions" + reportQuery()),
   ]);
-  document.getElementById("pl-title").textContent =
-    `${uiText("Profit & Loss")} — ${uiText(pl.period_label)}`;
+  document.getElementById("pl-title").textContent = `${uiText(
+    "Profit & Loss",
+  )} — ${uiText(pl.period_label)}`;
   document.getElementById("pl-income").innerHTML =
     pl.income_by_category
       .map(
         (r) =>
-          `<tr><td>${escapeHtml(r.category)}</td><td style="text-align:right">${fmt(r.total)}</td></tr>`,
+          `<tr><td>${escapeHtml(
+            r.category,
+          )}</td><td style="text-align:right">${fmt(r.total)}</td></tr>`,
       )
       .join("") ||
     `<tr><td class="empty">${uiText("No income recorded.")}</td></tr>`;
@@ -2500,7 +2593,9 @@ async function loadAccounting() {
     pl.expense_by_category
       .map(
         (r) =>
-          `<tr><td>${escapeHtml(r.category)}</td><td style="text-align:right">${fmt(r.total)}</td></tr>`,
+          `<tr><td>${escapeHtml(
+            r.category,
+          )}</td><td style="text-align:right">${fmt(r.total)}</td></tr>`,
       )
       .join("") ||
     `<tr><td class="empty">${uiText("No expenses recorded.")}</td></tr>`;
@@ -2512,9 +2607,15 @@ async function loadAccounting() {
     .map(
       (t) => `<tr>
     <td data-label="Date">${formatLocalDate(t.occurred_at)}</td>
-    <td data-label="Type"><span class="pill ${t.type === "income" ? "ok" : "low"}">${escapeHtml(t.type)}</span></td>
-    <td data-label="Category">${escapeHtml(t.category)}</td><td data-label="Description">${escapeHtml(t.description || "")}</td>
-    <td data-label="Amount" style="text-align:right">${fmt(t.amount)}</td></tr>`,
+    <td data-label="Type"><span class="pill ${
+      t.type === "income" ? "ok" : "low"
+    }">${escapeHtml(t.type)}</span></td>
+    <td data-label="Category">${escapeHtml(
+      t.category,
+    )}</td><td data-label="Description">${escapeHtml(t.description || "")}</td>
+    <td data-label="Amount" style="text-align:right">${fmt(
+      t.amount,
+    )}</td></tr>`,
     )
     .join("");
 }
@@ -2543,7 +2644,9 @@ document.getElementById("txn-form").addEventListener("submit", async (e) => {
     });
     e.target.reset();
     const today = new Date();
-    e.target.elements.occurred_at.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    e.target.elements.occurred_at.value = `${today.getFullYear()}-${String(
+      today.getMonth() + 1,
+    ).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     await Promise.all([loadAccounting(), loadDashboard()]);
     showToast("Transaction saved — your profit and loss is up to date.");
   } catch (err) {
@@ -2565,21 +2668,35 @@ async function loadInventory() {
         p.stock_qty <= 0
           ? "Out of stock"
           : p.stock_qty <= LOW_STOCK_THRESHOLD
-            ? "Low stock"
-            : "Healthy";
+          ? "Low stock"
+          : "Healthy";
       const statusClass =
         p.stock_qty <= 0
           ? "low"
           : p.stock_qty <= LOW_STOCK_THRESHOLD
-            ? "low"
-            : "ok";
+          ? "low"
+          : "ok";
       return `<tr>
-    <td data-label="Product">${escapeHtml(p.name)}</td><td data-label="Category">${escapeHtml(p.category || "")}</td>
-    <td data-label="Stock"><span class="pill ${statusClass}">${p.stock_qty} ${escapeHtml(p.unit || "unit")}</span><div class="sub">${status}</div></td>
-    <td data-label="Reorder Level">${p.stock_qty <= LOW_STOCK_THRESHOLD ? LOW_STOCK_THRESHOLD : "—"}</td><td data-label="Cost Price">${fmt(p.cost_price)}</td><td data-label="Sell Price">${fmt(p.sell_price)}</td>
+    <td data-label="Product">${escapeHtml(
+      p.name,
+    )}</td><td data-label="Category">${escapeHtml(p.category || "")}</td>
+    <td data-label="Stock"><span class="pill ${statusClass}">${
+        p.stock_qty
+      } ${escapeHtml(
+        p.unit || "unit",
+      )}</span><div class="sub">${status}</div></td>
+    <td data-label="Reorder Level">${
+      p.stock_qty <= LOW_STOCK_THRESHOLD ? LOW_STOCK_THRESHOLD : "—"
+    }</td><td data-label="Cost Price">${fmt(
+        p.cost_price,
+      )}</td><td data-label="Sell Price">${fmt(p.sell_price)}</td>
     <td data-label="Adjust" class="row-actions">
-      <button class="btn small secondary" onclick="adjustStock('${escapeHtml(p.id)}', 10)">+10</button>
-      <button class="btn small secondary" onclick="adjustStock('${escapeHtml(p.id)}', -10)">-10</button>
+      <button class="btn small secondary" onclick="adjustStock('${escapeHtml(
+        p.id,
+      )}', 10)">+10</button>
+      <button class="btn small secondary" onclick="adjustStock('${escapeHtml(
+        p.id,
+      )}', -10)">-10</button>
     </td></tr>`;
     })
     .join("");
@@ -2650,18 +2767,36 @@ async function loadMarket() {
     div.innerHTML = `
       <div class="head">
         <h3>${item.product_name}</h3>
-        <span class="badge-trend ${trendUp ? "up" : "down"}">${trendUp ? "▲" : "▼"} 14-day trend</span>
+        <span class="badge-trend ${trendUp ? "up" : "down"}">${
+      trendUp ? "▲" : "▼"
+    } 14-day trend</span>
       </div>
       <div class="flex" style="font-size:13px;color:var(--muted);margin-top:6px;">
-        <span>Your price: <strong style="color:var(--ink)">${fmt(item.your_sell_price)}</strong></span>
-        <span>Market price: <strong style="color:var(--ink)">${fmt(item.latest_market_price)}</strong></span>
-        <span>Supplier (${item.latest_supplier_name}): <strong style="color:var(--ink)">${fmt(item.latest_supplier_price)}</strong></span>
-        <span>Suggested price: <strong style="color:var(--amber)">${fmt(item.suggested_sell_price)}</strong></span>
+        <span>Your price: <strong style="color:var(--ink)">${fmt(
+          item.your_sell_price,
+        )}</strong></span>
+        <span>Market price: <strong style="color:var(--ink)">${fmt(
+          item.latest_market_price,
+        )}</strong></span>
+        <span>Supplier (${
+          item.latest_supplier_name
+        }): <strong style="color:var(--ink)">${fmt(
+      item.latest_supplier_price,
+    )}</strong></span>
+        <span>Suggested price: <strong style="color:var(--amber)">${fmt(
+          item.suggested_sell_price,
+        )}</strong></span>
       </div>
       <div class="price-gauge">
-        <div class="bar" style="left:${pct(item.your_cost_price)}%;width:${pct(item.your_sell_price) - pct(item.your_cost_price)}%;"></div>
-        <div class="marker" style="left:${pct(item.latest_market_price)}%;"><div class="tag">Market</div></div>
-        <div class="marker" style="left:${pct(item.your_sell_price)}%;border-color:var(--amber);background:var(--amber);"><div class="tag" style="color:var(--amber)">You</div></div>
+        <div class="bar" style="left:${pct(item.your_cost_price)}%;width:${
+      pct(item.your_sell_price) - pct(item.your_cost_price)
+    }%;"></div>
+        <div class="marker" style="left:${pct(
+          item.latest_market_price,
+        )}%;"><div class="tag">Market</div></div>
+        <div class="marker" style="left:${pct(
+          item.your_sell_price,
+        )}%;border-color:var(--amber);background:var(--amber);"><div class="tag" style="color:var(--amber)">You</div></div>
       </div>
       <canvas id="chart-${item.product_id}" style="margin-top:14px;"></canvas>
     `;
@@ -2719,10 +2854,24 @@ async function loadSales() {
   document.getElementById("invoice-list").innerHTML = invoices
     .map(
       (i) => `<tr>
-    <td data-label="Date">${formatLocalDate(i.created_at)}</td><td data-label="Customer">${escapeHtml(i.customer_name)}</td><td data-label="Product">${escapeHtml(i.product_name)}</td>
-    <td data-label="Qty">${i.qty}</td><td data-label="Price">${fmt(i.unit_price)}</td><td data-label="Total">${fmt(i.total)}</td>
-    <td data-label="Status"><span class="pill ${i.status}">${escapeHtml(i.status)}</span></td>
-    <td data-label="Actions" class="row-actions">${i.status === "unpaid" ? `<button class="btn small secondary" onclick="markPaid('${escapeHtml(i.id)}')">Mark Paid</button>` : ""}</td>
+    <td data-label="Date">${formatLocalDate(
+      i.created_at,
+    )}</td><td data-label="Customer">${escapeHtml(
+        i.customer_name,
+      )}</td><td data-label="Product">${escapeHtml(i.product_name)}</td>
+    <td data-label="Qty">${i.qty}</td><td data-label="Price">${fmt(
+        i.unit_price,
+      )}</td><td data-label="Total">${fmt(i.total)}</td>
+    <td data-label="Status"><span class="pill ${i.status}">${escapeHtml(
+        i.status,
+      )}</span></td>
+    <td data-label="Actions" class="row-actions">${
+      i.status === "unpaid"
+        ? `<button class="btn small secondary" onclick="markPaid('${escapeHtml(
+            i.id,
+          )}')">Mark Paid</button>`
+        : ""
+    }</td>
     </tr>`,
     )
     .join("");
@@ -2783,8 +2932,31 @@ document
     }
   });
 
+if (isNativeApp) {
+  const plugins = capacitor?.Plugins || {};
+  plugins.Network?.addListener?.("networkStatusChange", (status) => {
+    if (status.connected) syncAfterResume();
+  });
+  plugins.App?.addListener?.("resume", syncAfterResume);
+  plugins.App?.addListener?.("backButton", () => {
+    if (sidebar?.classList.contains("open")) {
+      closeMobileMenu();
+    } else if (!renameDialog.classList.contains("hidden")) {
+      closeRenameDialog();
+    } else if (!contextMenu.classList.contains("hidden")) {
+      hideBusinessMenu();
+    } else if (currentTab !== "businesses" && tabHistory.length) {
+      activateTab(tabHistory.at(-1), true);
+    } else {
+      plugins.App?.exitApp?.();
+    }
+  });
+  plugins.StatusBar?.setBackgroundColor?.({ color: "#0b4f4a" });
+  plugins.StatusBar?.setOverlaysWebView?.({ overlay: false });
+}
+
 // The app starts at Businesses. Select a business, then choose a feature manually.
-if ("serviceWorker" in navigator) {
+if ("serviceWorker" in navigator && !isNativeApp) {
   let reloadAfterUpdate = false;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
     if (reloadAfterUpdate) window.location.reload();
