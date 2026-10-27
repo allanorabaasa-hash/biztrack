@@ -123,9 +123,27 @@ Then open `http://localhost:8000` in the browser.
 
 ## Android app
 
-BizTrack uses Capacitor 8.5.3 with the static site copied to `www/`. The build copies Capacitor's browser plugin bundles and inserts their script tags into `www/index.html` only, so the GitHub Pages site continues to use the root web files without loading native plugins. Android launcher and splash assets are generated from `static/icons/icon-512.png` using `@capacitor/assets`.
+BizTrack uses Capacitor 8.5.3 with the static site copied to `www/`. The checked-in `capacitor.config.json` uses app name `BizTrack`, app ID `com.allanorabaasa.biztrack`, and `www` as `webDir`. The build copies the web app and Capacitor's browser plugin bundles into `www/`, and inserts plugin script tags into `www/index.html` only. The GitHub Pages site continues to use the root web files without loading native plugins.
 
-From the project root, install dependencies, build the web directory, and synchronize the Android project:
+The Capacitor Android project and launcher/splash resources are checked in. For a fresh project only, initialize the config and add the Android platform once:
+
+```bash
+npx cap init BizTrack com.allanorabaasa.biztrack --web-dir www
+npx cap add android
+```
+
+On Kali, configure the Android SDK, Android Studio path, and a full Java 21 JDK (Capacitor 8's Android build requires Java 21):
+
+```bash
+export ANDROID_HOME="$HOME/Android/Sdk"
+export CAPACITOR_ANDROID_STUDIO_PATH=/opt/android-studio/bin/studio.sh
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+```
+
+In Android Studio, open **Tools > SDK Manager** and install **Android SDK Platform 36** and **Android SDK Build-Tools 36.0.0** if they are missing. Confirm Java 21 includes `javac`; a JRE-only install is not enough.
+
+For normal development, run these commands from the repository root in order:
 
 ```bash
 npm install
@@ -134,27 +152,16 @@ npx cap sync android
 npx cap open android
 ```
 
-The Android project is committed in `android/`. When setting up the project for the first time, add Android once before syncing:
+The `CAPACITOR_ANDROID_STUDIO_PATH` export above lets `npx cap open android` find Android Studio under `/opt`.
+
+To build a debug APK from the repository root:
 
 ```bash
-npx cap add android
+./android/gradlew -p android assembleDebug
 ```
 
-Generate the Android launcher icons and splash screen from the existing BizTrack icon after adding Android:
+The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. To install it on a connected device, run `adb install -r android/app/build/outputs/apk/debug/app-debug.apk`. Alternatively, open Android Studio with `npx cap open android` and select **Build > Build Bundle(s) / APK(s) > Build APK(s)**. If regenerating native icons, use the BizTrack source icon in `static/icons/icon-512.png` with `@capacitor/assets`, then run `npx cap sync android` again.
 
-```bash
-mkdir -p assets
-cp static/icons/icon-512.png assets/icon.png
-npx @capacitor/assets generate --android --assetPath assets --iconBackgroundColor '#0b4f4a' --splashBackgroundColor '#0b4f4a'
-```
+Set `ANDROID_HOME` to `$HOME/Android/Sdk` on Kali and use Android Studio's embedded JDK 21 (or another JDK 21) for Gradle. Capacitor 8 requires Java 21.
 
-Then run `npx cap sync android` again to copy the generated native resources. To build a debug APK from the project root, use:
-
-```bash
-cd android
-./gradlew assembleDebug
-```
-
-The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. Alternatively, open Android Studio with `npx cap open android` and select **Build > Build Bundle(s) / APK(s) > Build APK(s)**.
-
-Password-reset emails should continue redirecting to the GitHub Pages reset page; keep that URL in Supabase Authentication's Redirect URLs. Deep-linking back into the app can be added later by configuring an Android App Link or custom URL scheme and intent filter, handling the incoming URL with Capacitor's App `appUrlOpen` / `getLaunchUrl` APIs, and adding that app URL to Supabase's Redirect URLs.
+Keep Supabase auth confirmation and password-reset email redirects on the GitHub Pages site (`https://allanorabaasa-hash.github.io/biztrack/`) and allowlist that URL under Supabase Authentication > URL Configuration. Native deep links can be added later with an Android App Link or custom URL scheme, an Android intent filter, Capacitor App's `appUrlOpen` / `getLaunchUrl` handlers, and the app link added to Supabase's Redirect URLs.

@@ -1,6 +1,9 @@
 const LOW_STOCK_THRESHOLD = 5;
 const capacitor = window.Capacitor;
 const isNativeApp = Boolean(capacitor?.isNativePlatform?.());
+const authRedirectUrl = isNativeApp
+  ? "https://allanorabaasa-hash.github.io/biztrack/"
+  : new URL("./", window.location.href).href;
 const PLAN_CONFIG = {
   basic: {
     id: "basic",
@@ -1943,7 +1946,7 @@ document
         email,
         password,
         options: {
-          emailRedirectTo: new URL("./", window.location.href).href,
+          emailRedirectTo: authRedirectUrl,
           data: { name: String(values.name).trim(), salt },
         },
       });
