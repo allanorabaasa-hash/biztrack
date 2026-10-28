@@ -42,14 +42,13 @@ How it works:
 3. If the webhook is lost, the app's status checks (and the next login) ask Relworx directly, so a paid user is never left stuck.
 4. `biztrack_grant_payment` adds 30 days (on top of any time left) and is idempotent, so a repeated webhook never adds extra time.
 
-Edge Function secrets (Supabase > Edge Functions > Secrets):
+Edge Function secrets (Supabase > Edge Functions > Secrets). In Relworx, set the request payment webhook to `https://bwnxektjplspuoltxors.supabase.co/functions/v1/payments/webhook`.
 
 | Name | Value |
 | --- | --- |
 | `RELWORX_API_KEY` | API key from Relworx > API Keys |
 | `RELWORX_ACCOUNT_NO` | Business account number (starts with `REL`) |
 | `RELWORX_WEBHOOK_KEY` | Webhook key from Relworx > Business Accounts > View > Settings |
-| `RELWORX_WEBHOOK_URL` | `https://bwnxektjplspuoltxors.supabase.co/functions/v1/payments/webhook` (must match what is entered in Relworx exactly) |
 
 Deploy `payments` with **JWT verification turned off** (Relworx cannot send a Supabase token; the function checks user tokens itself). Deploy `select-plan` with JWT verification on.
 

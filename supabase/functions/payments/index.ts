@@ -14,8 +14,8 @@
 //   RELWORX_API_KEY       API key from Relworx > API Keys
 //   RELWORX_ACCOUNT_NO    business account number, e.g. REL...
 //   RELWORX_WEBHOOK_KEY   webhook key from Relworx > Business Accounts > View > Settings
-//   RELWORX_WEBHOOK_URL   the exact webhook URL entered in Relworx
-//                         (https://<project>.supabase.co/functions/v1/payments/webhook)
+//   RELWORX_WEBHOOK_URL   optional: only if the webhook URL entered in Relworx is
+//                         NOT https://<project>.supabase.co/functions/v1/payments/webhook
 // SUPABASE_URL, SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase.
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.56.0";
@@ -86,6 +86,15 @@ const env = (name: string) => {
   const value = Deno.env.get(name);
   if (!value) throw new Error(`Missing secret ${name}`);
   return value;
+};
+
+// The webhook URL entered in Relworx. It is part of the signature, so it must
+// match exactly. By default it is built from this project's own address.
+const webhookUrl = () => {
+  const override = (Deno.env.get("RELWORX_WEBHOOK_URL") || "")
+    .replace(/[\s\u200B-\u200D\uFEFF]/g, "");
+  if (override) return override;
+  return `${env("SUPABASE_URL").replace(/\/+$/, "")}/functions/v1/payments/webhook`;
 };
 
 const relworxHeaders = () => ({
@@ -204,7 +213,7 @@ const relworx: PaymentProvider = {
       await crypto.subtle.sign(
         "HMAC",
         key,
-        new TextEncoder().encode(`${env("RELWORX_WEBHOOK_URL")}${timestamp}${signed}`),
+        new TextEncoder().encode(`${webhookUrl()}${timestamp}${signed}`),
       ),
     );
     return timingSafeEqual(expected, signature) ? payload : null;
