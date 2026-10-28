@@ -144,6 +144,11 @@
           <p class="eyebrow">Choose your access</p>
           <h1>Pick a plan for your workspace</h1>
           <p>Start with a monthly plan and unlock the features you need.</p>
+          <p
+            id="plan-access-status"
+            class="plan-access-status"
+            role="status"
+          ></p>
         </div>
         <div class="plan-grid">
           <article class="plan-card" data-plan-card="basic">
@@ -159,7 +164,7 @@
               <li>Overall Profit &amp; Loss</li>
             </ul>
             <button class="btn plan-choice" type="button" data-plan="basic">
-              Try for free
+              7-day free trial
             </button>
           </article>
           <article class="plan-card" data-plan-card="pro">
@@ -175,7 +180,7 @@
               <li>Dashboard sales and inventory widgets</li>
             </ul>
             <button class="btn plan-choice" type="button" data-plan="pro">
-              Try for free
+              Pay to start
             </button>
           </article>
           <article class="plan-card premium" data-plan-card="premium">
@@ -190,7 +195,7 @@
               <li>All other existing features</li>
             </ul>
             <button class="btn plan-choice" type="button" data-plan="premium">
-              Try for free
+              Pay to start
             </button>
           </article>
         </div>
@@ -268,6 +273,29 @@
         </div>
       </nav>
       <div class="main">
+        <section
+          id="access-banner"
+          class="access-banner hidden"
+          aria-live="polite"
+        >
+          <div>
+            <strong id="access-banner-message"></strong>
+            <span id="access-days-left"></span>
+          </div>
+          <div id="payment-status-list" class="payment-status-list"></div>
+          <div class="access-actions">
+            <button id="access-pay-button" class="btn small" type="button">
+              Pay
+            </button>
+            <button
+              id="export-data-button"
+              class="btn small secondary"
+              type="button"
+            >
+              Export data
+            </button>
+          </div>
+        </section>
         <div id="tab-businesses" class="tab">
           <div class="topbar">
             <div>
@@ -775,6 +803,42 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <div
+      id="payment-dialog"
+      class="dialog-backdrop hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="payment-dialog-title"
+    >
+      <form id="payment-form" class="dialog-card payment-dialog-card">
+        <h2 id="payment-dialog-title">Pay for BizTrack</h2>
+        <p id="payment-instructions"></p>
+        <p class="payment-reference-line">
+          Reference: <strong id="payment-reference"></strong>
+        </p>
+        <label for="payment-provider">Network</label>
+        <select id="payment-provider" name="provider" required>
+          <option value="mtn_momo">MTN MoMo</option>
+          <option value="airtel_money">Airtel Money</option>
+        </select>
+        <label for="payment-transaction-id"
+          >Transaction ID from confirmation SMS</label
+        >
+        <input
+          id="payment-transaction-id"
+          name="transactionId"
+          autocomplete="off"
+          required
+        />
+        <p id="payment-form-message" class="auth-message" role="status"></p>
+        <div class="dialog-actions">
+          <button id="payment-cancel" class="btn secondary" type="button">
+            Cancel
+          </button>
+          <button class="btn" type="submit">Submit payment</button>
+        </div>
+      </form>
+    </div>
     <div id="business-context-menu" class="context-menu hidden" role="menu">
       <button type="button" data-action="rename">Rename business</button>
       <button type="button" data-action="delete" class="danger">

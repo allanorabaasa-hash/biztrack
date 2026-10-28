@@ -29,7 +29,24 @@ The app now uses a plan object in the browser code. The three plan choices are:
 - `pro`: BizTrack Pro — UGX 7,500 / month
 - `premium`: BizTrack Premium — UGX 12,000 / month
 
-The selection is stored in `biztrack_profiles.subscription_plan`, while access control is enforced in the browser using a single config object and page allowlists.
+Basic includes a one-time 7-day trial. Pro and Premium require a verified payment. A verified payment grants 30 days, extending an active paid period rather than discarding remaining time. Expired accounts retain read-only access to all workspace pages and can export all data.
+
+## Approving payments
+
+Until automatic MTN MoMo and Airtel Money verification is integrated, users submit their SMS transaction ID and BizTrack creates a pending request. Check the queue in Supabase SQL Editor each day:
+
+```sql
+select * from public.biztrack_pending_payments order by requested_at;
+```
+
+After matching the provider, transaction ID, amount, and reference against your mobile-money statement, approve or reject the request:
+
+```sql
+select public.biztrack_approve_payment('BT-7K2Q');
+select public.biztrack_reject_payment('BT-7K2Q', 'Transaction not found in statement');
+```
+
+Run only one decision for a reference. Approval is atomic: it marks the payment verified, switches to the requested plan, and adds 30 days. The functions are executable only by `postgres` and `service_role`; normal users cannot call them. Do not approve a request until you have independently confirmed receipt. The marked TODO in `supabase/functions/request-payment/index.ts` is where verified MTN MoMo/Airtel Money callbacks will replace manual review.
 
 ## Recovery-key design
 
@@ -39,8 +56,6 @@ To avoid data loss when users forget passwords, the workspace is encrypted with 
 - a recovery-code-derived key.
 
 At signup and first login, the app should display a one-time recovery code and warn the user that if both the password and recovery code are lost, data cannot be recovered. The wrapped keys are stored in `biztrack_workspaces.data_key_wrapped` and `biztrack_workspaces.recovery_key_wrapped`.
-
-> TODO: real payment verification must happen server-side using a Supabase Edge Function and payment webhook; the client must then lose permission to write `subscription_plan`.
 
 ## News function deployment
 

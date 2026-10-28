@@ -17,9 +17,8 @@ const jsonResponse = (body: unknown, status: number, origin: string) => {
       "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
   });
-  if (allowedOrigins.includes(origin)) {
+  if (allowedOrigins.includes(origin))
     headers.set("Access-Control-Allow-Origin", origin);
-  }
   return new Response(status === 204 ? null : JSON.stringify(body), {
     status,
     headers,
@@ -29,190 +28,138 @@ const jsonResponse = (body: unknown, status: number, origin: string) => {
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get("Origin") || "";
   if (req.method === "OPTIONS") return jsonResponse({}, 204, origin);
-  if (req.method !== "POST") {
+  if (req.method !== "POST")
     return jsonResponse({ error: "Method not allowed." }, 405, origin);
-  }
 
-  const authorization = req.headers.get("Authorization") || "";
-  const token = authorization.replace(/^Bearer\s+/i, "").trim();
-  if (!token || token === authorization) {
+  const token = (req.headers.get("Authorization") || "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+  if (!token)
     return jsonResponse(
       { error: "A valid bearer token is required." },
       401,
       origin,
     );
-  }
 
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const url = Deno.env.get("SUPABASE_URL");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !anonKey || !serviceKey)
     return jsonResponse(
       { error: "Supabase function environment is incomplete." },
       500,
       origin,
     );
-  }
 
-  const authClient = createClient(supabaseUrl, anonKey);
+  const auth = createClient(url, anonKey);
   const {
     data: { user },
     error: authError,
-  } = await authClient.auth.getUser(token);
-  if (authError || !user) {
+  } = await auth.auth.getUser(token);
+  if (authError || !user)
     return jsonResponse(
       { error: "Your session is invalid or expired." },
       401,
       origin,
     );
-  }
 
-  let body: { plan?: unknown; validateCurrent?: unknown };
+  let body: { validateCurrent?: unknown; plan?: unknown };
   try {
     body = await req.json();
   } catch {
-    return jsonResponse({ error: "A JSON plan is required." }, 400, origin);
+    return jsonResponse({ error: "A JSON request is required." }, 400, origin);
   }
-  const validateCurrent = body.validateCurrent === true;
-  if (
-    !validateCurrent &&
-    (typeof body.plan !== "string" ||
-      !["basic", "pro", "premium"].includes(body.plan))
-  ) {
-    return jsonResponse({ error: "Choose a valid plan." }, 400, origin);
-  }
-
-  const admin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-  const { data: profile, error: profileError } = await admin
-    .from("biztrack_profiles")
-    .select("subscription_plan, trial_ends_at")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (profileError) {
-    return jsonResponse({ error: "Could not load your plan." }, 500, origin);
-  }
-  const plan = validateCurrent
-    ? profile?.subscription_plan || "basic"
-    : body.plan;
-  if (typeof plan !== "string" || !["basic", "pro", "premium"].includes(plan)) {
-    return jsonResponse({ error: "Choose a valid plan." }, 400, origin);
-  }
-
-  const trialMode = Deno.env.get("TRIAL_MODE")?.toLowerCase() === "true";
-  const trialDaysValue = Number(Deno.env.get("TRIAL_DAYS") || 30);
-  const trialDays =
-    Number.isInteger(trialDaysValue) && trialDaysValue > 0
-      ? Math.min(trialDaysValue, 3650)
-      : 30;
-  const existingTrialEnd = profile?.trial_ends_at || null;
-  const trialExpired = Boolean(
-    trialMode && existingTrialEnd && Date.parse(existingTrialEnd) <= Date.now(),
-  );
-
-  if (trialExpired) {
-    const { error } = await admin
-      .from("biztrack_profiles")
-      .update({
-        subscription_plan: "basic",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("user_id", user.id);
-    if (error)
-      return jsonResponse(
-        { error: "Could not update your plan." },
-        500,
-        origin,
-      );
+  if (body.validateCurrent !== true && body.plan !== "basic") {
     return jsonResponse(
-      {
-        plan: "basic",
-        trialEndsAt: existingTrialEnd,
-        trialEnded: true,
-        trialMode,
-      },
-      200,
+      { error: "Only Basic can be selected without a payment." },
+      400,
       origin,
     );
   }
 
-  let trialEndsAt = existingTrialEnd;
-  if (trialMode && !trialEndsAt) {
-    trialEndsAt = new Date(
-      Date.now() + trialDays * 24 * 60 * 60 * 1000,
-    ).toISOString();
+  const admin = createClient(url, serviceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { data: profile, error } = await admin
+    .from("biztrack_profiles")
+    .select("subscription_plan, trial_ends_at, plan_expires_at")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (error)
+    return jsonResponse(
+      { error: "Could not load your access status." },
+      500,
+      origin,
+    );
+
+  const now = Date.now();
+  const paidActive = Boolean(
+    profile?.plan_expires_at && Date.parse(profile.plan_expires_at) > now,
+  );
+  const trialWasUsed = Boolean(profile?.trial_ends_at);
+  let trialEndsAt = profile?.trial_ends_at || null;
+  let planExpiresAt = profile?.plan_expires_at || null;
+  let plan = profile?.subscription_plan || "basic";
+  let trialStarted = false;
+
+  if (!trialWasUsed) {
+    trialEndsAt = new Date(now + 7 * 86400000).toISOString();
+    if (!paidActive) plan = "basic";
+    trialStarted = true;
+  } else if (!paidActive) {
+    plan = "basic";
+    planExpiresAt = null;
   }
 
-  if (!trialMode && plan !== "basic") {
-    // TODO: Verify MTN MoMo or Airtel Money callbacks here before marking a payment verified.
-    const { data: payment, error } = await admin
-      .from("biztrack_payments")
-      .select("id")
-      .eq("user_id", user.id)
-      .eq("plan", plan)
-      .eq("status", "verified")
-      .not("verified_at", "is", null)
-      .limit(1)
-      .maybeSingle();
-    if (error)
+  if (
+    !profile ||
+    plan !== profile.subscription_plan ||
+    trialEndsAt !== profile.trial_ends_at ||
+    planExpiresAt !== profile.plan_expires_at
+  ) {
+    const update = {
+      user_id: user.id,
+      email: user.email || "",
+      name: String(user.user_metadata?.name || "BizTrack user"),
+      subscription_plan: plan,
+      trial_ends_at: trialEndsAt,
+      plan_expires_at: planExpiresAt,
+      updated_at: new Date().toISOString(),
+    };
+    const saved = profile
+      ? await admin
+          .from("biztrack_profiles")
+          .update(update)
+          .eq("user_id", user.id)
+      : await admin.from("biztrack_profiles").insert(update);
+    if (saved.error)
       return jsonResponse(
-        { error: "Could not verify payment status." },
+        { error: "Could not save your access status." },
         500,
         origin,
       );
-    if (!payment) {
-      if (validateCurrent && profile) {
-        const { error: downgradeError } = await admin
-          .from("biztrack_profiles")
-          .update({
-            subscription_plan: "basic",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("user_id", user.id);
-        if (downgradeError) {
-          return jsonResponse(
-            { error: "Could not update your plan." },
-            500,
-            origin,
-          );
-        }
-        return jsonResponse(
-          { plan: "basic", trialEndsAt, trialEnded: false, trialMode },
-          200,
-          origin,
-        );
-      }
-      return jsonResponse(
-        { error: "A verified payment for this plan is required." },
-        402,
-        origin,
-      );
-    }
   }
 
-  const updates: Record<string, string | null> = {
-    subscription_plan: plan,
-    trial_ends_at: trialEndsAt,
-    updated_at: new Date().toISOString(),
-  };
-  const { error: updateError } = profile
-    ? await admin
-        .from("biztrack_profiles")
-        .update(updates)
-        .eq("user_id", user.id)
-    : await admin.from("biztrack_profiles").insert({
-        user_id: user.id,
-        email: user.email || "",
-        name: String(user.user_metadata?.name || "BizTrack user"),
-        ...updates,
-      });
-  if (updateError) {
-    return jsonResponse({ error: "Could not save your plan." }, 500, origin);
-  }
-
+  const access = paidActive
+    ? "paid"
+    : trialEndsAt && Date.parse(trialEndsAt) > now
+    ? "trial"
+    : "read_only";
   return jsonResponse(
-    { plan, trialEndsAt, trialEnded: false, trialMode },
+    {
+      plan,
+      trialEndsAt,
+      planExpiresAt,
+      access,
+      trialStarted,
+      trialDaysLeft:
+        trialEndsAt && Date.parse(trialEndsAt) > now
+          ? Math.ceil((Date.parse(trialEndsAt) - now) / 86400000)
+          : 0,
+      planDaysLeft: paidActive
+        ? Math.ceil((Date.parse(planExpiresAt!) - now) / 86400000)
+        : 0,
+    },
     200,
     origin,
   );

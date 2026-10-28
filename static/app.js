@@ -52,6 +52,40 @@ const PLAN_CONFIG = {
     includes: ["Everything in Pro", "News section", "All existing features"],
   },
 };
+const accessState = (account = activeUser) => {
+  const now = Date.now();
+  const candidate = account?.plan || activePlan || "basic";
+  const plan = PLAN_CONFIG[candidate] ? candidate : "basic";
+  const paid = Boolean(
+    account?.planExpiresAt && Date.parse(account.planExpiresAt) > now,
+  );
+  const trial = Boolean(
+    account?.trialEndsAt && Date.parse(account.trialEndsAt) > now,
+  );
+  const active = paid ? plan : "basic";
+  const expiresAt = paid
+    ? account.planExpiresAt
+    : trial
+    ? account.trialEndsAt
+    : null;
+  return {
+    access: paid ? "paid" : trial ? "trial" : "read_only",
+    plan: active,
+    expiresAt: expiresAt ? Date.parse(expiresAt) : null,
+    daysLeft: expiresAt
+      ? Math.ceil((Date.parse(expiresAt) - now) / 86400000)
+      : 0,
+  };
+};
+const isReadOnly = () =>
+  Boolean(activeUser) && accessState().access === "read_only";
+const requireWriteAccess = () => {
+  if (isReadOnly()) {
+    throw new Error(
+      "Your free trial / plan has ended. Your data is safe. Pay to continue adding records.",
+    );
+  }
+};
 const fmt = (n) => "UGX " + Math.round(Number(n || 0)).toLocaleString();
 const uiText = (value) => value;
 const escapeHtml = (value = "") =>
@@ -84,6 +118,7 @@ const supabaseClient =
 let activeUser = null;
 let activePlan = "";
 let trialExpiryNoticeFor = "";
+let accessExpiryTimer;
 const emptyStore = () => ({
   businesses: [],
   products: [],
@@ -619,6 +654,7 @@ const readStore = async () => {
 };
 const writeStore = async (store) => {
   if (!activeUser) throw new Error("Unlock your workspace to continue.");
+  requireWriteAccess();
   const previousLocal = await localWorkspace(activeUser.id);
   let previous = null;
   if (previousLocal?.encrypted_data) {
@@ -884,6 +920,7 @@ const syncWorkspace = async () => {
     failed = true;
     console.warn("Workspace sync deferred:", error);
     const latest = await localWorkspace(userId);
+    const accessDenied = error?.code === "42501" || error?.status === 403;
     syncNeedsLogin = error?.status === 401;
     setSyncStatus(
       syncNeedsLogin ? "auth" : navigator.onLine ? "failed" : "offline",
@@ -892,6 +929,12 @@ const syncWorkspace = async () => {
     if (syncNeedsLogin) {
       showToast(
         "Your session expired. Log in to sync; local changes are safe.",
+        true,
+      );
+    } else if (accessDenied) {
+      refreshAccessBanner();
+      showToast(
+        "Your encrypted changes remain on this device. They can sync after payment restores write access.",
         true,
       );
     } else if (navigator.onLine) {
@@ -937,6 +980,7 @@ window.addEventListener("online", async () => {
       // Local work remains available when the cached server session expires.
     }
     await syncWorkspace();
+    await loadPaymentStatuses();
   }
 });
 const syncAfterResume = async () => {
@@ -947,6 +991,7 @@ const syncAfterResume = async () => {
     // Local work remains available when the cached server session expires.
   }
   await syncWorkspace();
+  await loadPaymentStatuses();
 };
 window.addEventListener("offline", async () => {
   const local = activeUser ? await localWorkspace(activeUser.id) : null;
@@ -1019,40 +1064,13 @@ const updateSubscription = async (plan) => {
   return true;
 };
 const planAllowed = (page) => {
-  const trialEnded = Boolean(
-    activeUser?.trialMode &&
-      activeUser.trialEndsAt &&
-      Date.parse(activeUser.trialEndsAt) <= Date.now(),
-  );
-  if (trialEnded && activePlan !== "basic") {
-    activePlan = "basic";
-    if (trialExpiryNoticeFor !== activeUser.id) {
-      trialExpiryNoticeFor = activeUser.id;
-      showToast("Your trial has ended. BizTrack Basic remains available.");
-      localWorkspace(activeUser.id)
-        .then((local) =>
-          saveLocalWorkspace({
-            ...(local || {}),
-            user_id: activeUser.id,
-            plan: "basic",
-            requestedPlan: "basic",
-            trialEndsAt: activeUser.trialEndsAt,
-            trialMode: activeUser.trialMode,
-            planUnsynced: true,
-          }),
-        )
-        .then(() => {
-          updatePlanUI();
-          syncWorkspace();
-        });
-    }
-  }
-  if (trialEnded) return true;
-  const plan = activePlan || "basic";
+  if (isReadOnly()) return true;
+  const plan = accessState().plan;
   const current = PLAN_CONFIG[plan]?.pages || PLAN_CONFIG.basic.pages;
   return current.includes(page);
 };
 const ensurePlanAccess = (tab) => {
+  if (isReadOnly()) return true;
   if (tab === "news" && !planAllowed("news")) return false;
   if (tab === "sales" && !planAllowed("sales")) return false;
   if (tab === "inventory" && !planAllowed("inventory")) return false;
@@ -1119,6 +1137,7 @@ const api = async (path, opts = {}) => {
   const [route, query = ""] = path.split("?");
   const params = new URLSearchParams(query);
   const method = (opts.method || "GET").toUpperCase();
+  if (method !== "GET") requireWriteAccess();
   const data = requestData(opts);
   const store = await readStore();
   const businessId = String(currentBusinessId);
@@ -1888,6 +1907,7 @@ const showAuthPanel = (signup) => {
   authMessage();
 };
 const beginSession = async (account, key) => {
+  const savedLocal = await localWorkspace(account.id);
   activeUser = {
     id: account.id,
     key,
@@ -1895,13 +1915,13 @@ const beginSession = async (account, key) => {
     email: account.email || "",
     session: account.session || null,
     trialEndsAt: account.trialEndsAt || null,
+    planExpiresAt: account.planExpiresAt || savedLocal?.planExpiresAt || null,
     trialMode: account.trialMode === true || savedLocal?.trialMode === true,
     legacyPasswordKey: account.legacyPasswordKey || null,
     dataKeyWrapped: account.dataKeyWrapped || null,
     recoveryKeyWrapped: account.recoveryKeyWrapped || null,
   };
   activePlan = account.plan || "";
-  const savedLocal = await localWorkspace(account.id);
   await saveLocalWorkspace({
     ...(savedLocal || {}),
     user_id: account.id,
@@ -1917,22 +1937,11 @@ const beginSession = async (account, key) => {
     plan: activePlan || savedLocal?.plan || "",
     trialEndsAt: activeUser.trialEndsAt || savedLocal?.trialEndsAt || null,
     trialMode: activeUser.trialMode,
+    planExpiresAt: activeUser.planExpiresAt,
   });
   activePlan ||= savedLocal?.plan || "";
-  const trialEnded = Boolean(
-    activeUser.trialEndsAt && Date.parse(activeUser.trialEndsAt) <= Date.now(),
-  );
-  if (trialEnded && activePlan !== "basic") activePlan = "basic";
-  if (trialEnded && activePlan === "basic") {
-    trialExpiryNoticeFor = account.id;
-    await saveLocalWorkspace({
-      ...(await localWorkspace(account.id)),
-      plan: "basic",
-      requestedPlan: "basic",
-      planUnsynced: true,
-      trialEndsAt: activeUser.trialEndsAt,
-    });
-  }
+  const state = accessState();
+  activePlan = state.plan;
   resetInactivityTimer();
   setSyncStatus(
     savedLocal?.unsynced
@@ -1952,14 +1961,14 @@ const beginSession = async (account, key) => {
   if (currentBusinessId) localStorage.setItem(businessKey, currentBusinessId);
   localStorage.removeItem("biztrack-business-id");
   document.getElementById("auth-screen").classList.add("hidden");
-  if (activePlan) {
+  if (state.access !== "read_only" || savedLocal?.encrypted_data) {
     document.getElementById("plan-screen").classList.add("hidden");
     document.querySelector(".app").classList.remove("hidden");
     document.getElementById("account-plan").textContent =
       PLAN_CONFIG[activePlan]?.name || "BizTrack Basic";
     updatePlanUI();
-    if (trialEnded)
-      showToast("Your trial has ended. BizTrack Basic remains available.");
+    refreshAccessBanner();
+    loadPaymentStatuses();
     await loadBusinesses();
     resetInactivityTimer();
     syncWorkspace();
@@ -1977,15 +1986,37 @@ const openWorkspaceFromLocal = async () => {
   document.getElementById("account-plan").textContent =
     PLAN_CONFIG[activePlan]?.name || "BizTrack Basic";
   updatePlanUI();
+  refreshAccessBanner();
   await loadBusinesses();
   resetInactivityTimer();
 };
 const showPlanSelection = () => {
   if (!document.getElementById("plan-screen")) return;
+  const state = accessState();
+  const status = document.getElementById("plan-access-status");
+  if (status) {
+    status.textContent =
+      state.access === "read_only"
+        ? "Your workspace is read-only. Choose a plan to restore editing."
+        : `${
+            state.access === "trial"
+              ? "Basic trial"
+              : PLAN_CONFIG[state.plan]?.name || "Plan"
+          }: ${state.daysLeft} day${
+            state.daysLeft === 1 ? "" : "s"
+          } remaining.`;
+  }
   const cards = document.querySelectorAll("[data-plan-card]");
   cards.forEach((card) => {
     const code = card.dataset.planCard;
     card.classList.toggle("selected", activePlan === code);
+    const choice = card.querySelector(".plan-choice");
+    if (choice && code === "basic") {
+      choice.textContent =
+        state.access === "read_only" && activeUser?.trialEndsAt
+          ? "Pay to start"
+          : "7-day free trial";
+    }
   });
 };
 const updatePlanUI = () => {
@@ -1999,7 +2030,215 @@ const updatePlanUI = () => {
       planAllowed(item.dataset.tab);
     item.style.display = allowed ? "" : "none";
   });
+  refreshAccessBanner();
 };
+const refreshAccessBanner = () => {
+  const banner = document.getElementById("access-banner");
+  if (!banner || !activeUser) return;
+  const state = accessState();
+  const ended = state.access === "read_only";
+  clearTimeout(accessExpiryTimer);
+  if (state.expiresAt) {
+    accessExpiryTimer = setTimeout(
+      () => updatePlanUI(),
+      Math.min(Math.max(state.expiresAt - Date.now() + 50, 0), 2147480000),
+    );
+  }
+  banner.classList.toggle(
+    "hidden",
+    !ended && state.access !== "trial" && state.access !== "paid",
+  );
+  const message = document.getElementById("access-banner-message");
+  const days = document.getElementById("access-days-left");
+  if (message) {
+    message.textContent = ended
+      ? "Your free trial / plan has ended. Your data is safe. Pay to continue adding records."
+      : `${
+          state.access === "trial"
+            ? "Basic trial"
+            : PLAN_CONFIG[state.plan]?.name || "Plan"
+        } active`;
+  }
+  if (days)
+    days.textContent = ended
+      ? "Your workspace is read-only."
+      : `${state.daysLeft} day${state.daysLeft === 1 ? "" : "s"} left.`;
+  const payButton = document.getElementById("access-pay-button");
+  if (payButton) payButton.textContent = ended ? "Pay" : "Upgrade / renew";
+  document
+    .querySelectorAll(
+      "#business-form, #rename-business-form, #txn-form, #product-form, #market-form, #invoice-form",
+    )
+    .forEach((form) => {
+      form
+        .querySelectorAll("input, select, textarea, button")
+        .forEach((control) => {
+          control.disabled = ended;
+        });
+    });
+  ["invoice-submit", "product-submit", "market-submit"].forEach((id) => {
+    const control = document.getElementById(id);
+    if (control) control.disabled = ended;
+  });
+  document
+    .querySelectorAll(
+      "#product-list button, #invoice-list button, #business-context-menu button",
+    )
+    .forEach((control) => {
+      control.disabled = ended;
+    });
+};
+const exportWorkspace = async () => {
+  const store = await readStore();
+  const blob = new Blob(
+    [
+      JSON.stringify(
+        { exportedAt: new Date().toISOString(), data: store },
+        null,
+        2,
+      ),
+    ],
+    { type: "application/json" },
+  );
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `biztrack-export-${new Date()
+    .toISOString()
+    .slice(0, 10)}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+};
+const openPaymentDialog = async (plan = "pro") => {
+  const message = document.getElementById("payment-form-message");
+  message.textContent = "";
+  try {
+    const { data, error } = await supabaseClient.functions.invoke(
+      "request-payment",
+      {
+        body: { action: "prepare", plan },
+      },
+    );
+    if (error) throw error;
+    document.getElementById("payment-instructions").textContent = `${
+      PLAN_CONFIG[plan].name
+    }: UGX ${Number(
+      data.amount,
+    ).toLocaleString()}. Pay to MTN: [FILL IN: my MTN number and registered name] or Airtel: [FILL IN: my Airtel number and registered name]. Put this reference in the payment reason/message if supported.`;
+    document.getElementById("payment-reference").textContent = data.reference;
+    document.getElementById("payment-dialog").dataset.plan = plan;
+    document.getElementById("payment-dialog").dataset.reference =
+      data.reference;
+    document.getElementById("payment-dialog").classList.remove("hidden");
+  } catch (error) {
+    showToast(error.message || "Payment details could not be loaded.", true);
+  }
+};
+const loadPaymentStatuses = async () => {
+  if (!activeUser || !navigator.onLine || !supabaseClient) return;
+  const { data, error } = await supabaseClient.functions.invoke(
+    "request-payment",
+    {
+      body: { action: "list" },
+    },
+  );
+  if (error) return;
+  const statusList = document.getElementById("payment-status-list");
+  if (statusList) {
+    statusList.textContent = (data.requests || [])
+      .slice(0, 3)
+      .map((request) => {
+        const status =
+          request.status === "verified"
+            ? "approved"
+            : request.status === "failed"
+            ? "rejected"
+            : "pending";
+        return `${request.reference_code}: ${status}${
+          request.rejection_reason ? ` (${request.rejection_reason})` : ""
+        }`;
+      })
+      .join(" · ");
+  }
+  for (const request of data.requests || []) {
+    const seenKey = `biztrack-payment-seen-${activeUser.id}-${request.reference_code}-${request.status}`;
+    if (!localStorage.getItem(seenKey)) {
+      localStorage.setItem(seenKey, "1");
+      if (request.status === "verified") {
+        const { data: access, error: accessError } =
+          await supabaseClient.functions.invoke("select-plan", {
+            body: { validateCurrent: true },
+          });
+        if (!accessError && activeUser) {
+          activePlan = access.plan || "basic";
+          activeUser.planExpiresAt = access.planExpiresAt || null;
+          activeUser.trialEndsAt = access.trialEndsAt || null;
+          activeUser.trialMode = access.access === "trial";
+          const local = (await localWorkspace(activeUser.id)) || {};
+          await saveLocalWorkspace({
+            ...local,
+            plan: activePlan,
+            planExpiresAt: activeUser.planExpiresAt,
+            trialEndsAt: activeUser.trialEndsAt,
+            trialMode: activeUser.trialMode,
+          });
+          updatePlanUI();
+          showToast(`${request.plan} payment approved. Your plan is active.`);
+        }
+      } else if (request.status === "failed") {
+        showToast(
+          `Payment request ${request.reference_code} was rejected: ${
+            request.rejection_reason || "Contact support."
+          }`,
+          true,
+        );
+      } else {
+        showToast(`Payment ${request.reference_code} is pending confirmation.`);
+      }
+    }
+  }
+};
+document.getElementById("export-data-button")?.addEventListener("click", () => {
+  exportWorkspace().catch((error) => showToast(error.message, true));
+});
+document.getElementById("access-pay-button")?.addEventListener("click", () => {
+  document.getElementById("plan-screen").classList.remove("hidden");
+  showPlanSelection();
+});
+document.getElementById("payment-cancel")?.addEventListener("click", () => {
+  document.getElementById("payment-dialog").classList.add("hidden");
+});
+document
+  .getElementById("payment-form")
+  ?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const dialog = document.getElementById("payment-dialog");
+    const message = document.getElementById("payment-form-message");
+    const form = new FormData(event.currentTarget);
+    try {
+      const { data, error } = await supabaseClient.functions.invoke(
+        "request-payment",
+        {
+          body: {
+            action: "submit",
+            plan: dialog.dataset.plan,
+            reference: dialog.dataset.reference,
+            provider: form.get("provider"),
+            transactionId: form.get("transactionId"),
+          },
+        },
+      );
+      if (error) throw error;
+      dialog.classList.add("hidden");
+      showToast(
+        "Payment submitted. We'll confirm within [FILL IN: e.g. 24 hours].",
+      );
+      await loadPaymentStatuses();
+    } catch (error) {
+      message.textContent =
+        error.message || "Payment request could not be submitted.";
+    }
+  });
 const showAuthError = (error, fallback) => {
   if (error?.message === "Supabase is not configured.") {
     authMessage(
@@ -2067,7 +2306,6 @@ document
       account.dataKeyWrapped = keyBundle.dataKeyWrapped;
       account.recoveryKeyWrapped = keyBundle.recoveryKeyWrapped;
       await beginSession(account, keyBundle.dataKey);
-      await writeStore(emptyStore());
       showRecoveryCode(keyBundle.recoveryCode);
     } catch (error) {
       showAuthError(error, "Could not create your account.");
@@ -2152,37 +2390,19 @@ document
           initialWorkspace: workspace,
         });
       }
-      const { data: profile, error: profileError } = await supabaseClient
-        .from("biztrack_profiles")
-        .select("subscription_plan, trial_ends_at")
-        .eq("user_id", data.user.id)
-        .maybeSingle();
-      if (profileError) throw profileError;
-      let verifiedPlan = "basic";
-      let trialEndsAt = profile?.trial_ends_at || null;
-      let verifiedTrialMode = false;
-      try {
-        const { data: planState, error: planError } =
-          await supabaseClient.functions.invoke("select-plan", {
-            body: { validateCurrent: true },
-          });
-        if (planError) throw planError;
-        verifiedPlan = planState.plan || "basic";
-        trialEndsAt = planState.trialEndsAt || null;
-        verifiedTrialMode = planState.trialMode === true;
-      } catch (planError) {
-        console.warn(
-          "Plan verification deferred; using Basic access:",
-          planError,
-        );
-      }
+      const { data: planState, error: planError } =
+        await supabaseClient.functions.invoke("select-plan", {
+          body: { validateCurrent: true },
+        });
+      if (planError) throw planError;
       const account = {
         id: data.user.id,
         email: data.user.email,
         salt,
-        plan: verifiedPlan,
-        trialEndsAt,
-        trialMode: verifiedTrialMode,
+        plan: planState.plan || "basic",
+        trialEndsAt: planState.trialEndsAt,
+        planExpiresAt: planState.planExpiresAt,
+        trialMode: planState.access === "trial",
         session: data.session,
         dataKeyWrapped: keyBundle.dataKeyWrapped,
         recoveryKeyWrapped: keyBundle.recoveryKeyWrapped,
@@ -2358,21 +2578,38 @@ document.querySelectorAll(".plan-choice").forEach((button) => {
     const plan = button.dataset.plan;
     try {
       if (!activeUser) throw new Error("Unlock your workspace first.");
-      const planUpdated = await updateSubscription(plan);
-      if (!planUpdated) {
-        document.getElementById("plan-screen").classList.add("hidden");
-        document.querySelector(".app").classList.remove("hidden");
-        updatePlanUI();
-        await loadBusinesses();
+      const state = accessState();
+      if (
+        plan !== "basic" ||
+        (state.access === "read_only" && activeUser.trialEndsAt)
+      ) {
+        await openPaymentDialog(plan);
         return;
       }
+      const { data: access, error } = await supabaseClient.functions.invoke(
+        "select-plan",
+        { body: { plan: "basic" } },
+      );
+      if (error) throw error;
+      activePlan = access.plan || "basic";
+      activeUser.trialEndsAt = access.trialEndsAt || null;
+      activeUser.planExpiresAt = access.planExpiresAt || null;
+      activeUser.trialMode = access.access === "trial";
+      const local = (await localWorkspace(activeUser.id)) || {};
+      await saveLocalWorkspace({
+        ...local,
+        plan: activePlan,
+        trialEndsAt: activeUser.trialEndsAt,
+        planExpiresAt: activeUser.planExpiresAt,
+        trialMode: activeUser.trialMode,
+      });
       document.getElementById("plan-screen").classList.add("hidden");
       document.querySelector(".app").classList.remove("hidden");
       updatePlanUI();
       await loadBusinesses();
-      showToast(
-        `${PLAN_CONFIG[plan]?.name || plan} selected. Welcome to BizTrack.`,
-      );
+      await loadPaymentStatuses();
+      if (!local.encrypted_data) await writeStore(emptyStore());
+      refreshAccessBanner();
     } catch (error) {
       document.getElementById("plan-message").textContent = error.message;
     }
