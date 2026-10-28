@@ -826,9 +826,64 @@ h3,
   color: #765d31;
   font-size: 12px;
 }
-.payment-reference-line strong {
-  color: var(--teal);
+.payment-status-list {
+  white-space: pre-line;
+}
+.payment-dialog-card input {
   font-size: 18px;
+  letter-spacing: 0.02em;
+}
+.payment-dialog-card #payment-summary {
+  color: var(--ink);
+  font-weight: 600;
+}
+.payment-dialog-card .payment-network {
+  min-height: 1.2em;
+  font-size: 13px;
+  color: var(--teal);
+  font-weight: 600;
+}
+.payment-dialog-card .payment-note {
+  font-size: 13px;
+}
+.payment-dialog-card .auth-message {
+  color: var(--teal);
+  font-weight: 600;
+}
+.payment-dialog-card .auth-message.error {
+  color: var(--bad);
+}
+.payment-waiting {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
+.payment-waiting.hidden {
+  display: none;
+}
+.payment-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--line);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: payment-spin 0.9s linear infinite;
+}
+@keyframes payment-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .payment-spinner {
+    animation-duration: 3s;
+  }
+}
+.plan-trial-note {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--good);
 }
 @media (max-width: 560px) {
   .access-banner {

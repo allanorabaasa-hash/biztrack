@@ -31,22 +31,45 @@ The app now uses a plan object in the browser code. The three plan choices are:
 
 Basic includes a one-time 7-day trial. Pro and Premium require a verified payment. A verified payment grants 30 days, extending an active paid period rather than discarding remaining time. Expired accounts retain read-only access to all workspace pages and can export all data.
 
-## Approving payments
+## Payments (automatic, via Relworx)
 
-Until automatic MTN MoMo and Airtel Money verification is integrated, users submit their SMS transaction ID and BizTrack creates a pending request. Check the queue in Supabase SQL Editor each day:
+Users pay with MTN or Airtel Mobile Money. They enter their number, approve the prompt on their phone with their PIN, and the plan unlocks automatically. Prices live on the server in `supabase/functions/payments/index.ts` (Basic 5,000, Pro 7,500, Premium 12,000 UGX per 30 days).
+
+How it works:
+
+1. The app calls the `payments` function (`action: "create"`). The server records a pending payment and asks Relworx to send the PIN prompt.
+2. Relworx calls `payments/webhook` when the payment finishes. The signature is checked, then the result is re-checked with Relworx's status API before anything is granted.
+3. If the webhook is lost, the app's status checks (and the next login) ask Relworx directly, so a paid user is never left stuck.
+4. `biztrack_grant_payment` adds 30 days (on top of any time left) and is idempotent, so a repeated webhook never adds extra time.
+
+Edge Function secrets (Supabase > Edge Functions > Secrets):
+
+| Name | Value |
+| --- | --- |
+| `RELWORX_API_KEY` | API key from Relworx > API Keys |
+| `RELWORX_ACCOUNT_NO` | Business account number (starts with `REL`) |
+| `RELWORX_WEBHOOK_KEY` | Webhook key from Relworx > Business Accounts > View > Settings |
+| `RELWORX_WEBHOOK_URL` | `https://bwnxektjplspuoltxors.supabase.co/functions/v1/payments/webhook` (must match what is entered in Relworx exactly) |
+
+Deploy `payments` with **JWT verification turned off** (Relworx cannot send a Supabase token; the function checks user tokens itself). Deploy `select-plan` with JWT verification on.
+
+To add another provider later (Flutterwave, MTN or Airtel direct), implement the `PaymentProvider` interface in `payments/index.ts` and switch `PROVIDER`.
+
+## Payment support
+
+Recent payments (SQL Editor):
 
 ```sql
-select * from public.biztrack_pending_payments order by requested_at;
+select * from public.biztrack_recent_payments limit 20;
 ```
 
-After matching the provider, transaction ID, amount, and reference against your mobile-money statement, approve or reject the request:
+If a customer paid but their plan did not unlock, find the payment in the Relworx dashboard first. Only when Relworx shows it as successful, grant it by its BizTrack reference:
 
 ```sql
-select public.biztrack_approve_payment('BT-7K2Q');
-select public.biztrack_reject_payment('BT-7K2Q', 'Transaction not found in statement');
+select public.biztrack_admin_grant('BT0123456789abcdef0123');
 ```
 
-Run only one decision for a reference. Approval is atomic: it marks the payment verified, switches to the requested plan, and adds 30 days. The functions are executable only by `postgres` and `service_role`; normal users cannot call them. Do not approve a request until you have independently confirmed receipt. The marked TODO in `supabase/functions/request-payment/index.ts` is where verified MTN MoMo/Airtel Money callbacks will replace manual review.
+Granting is idempotent: running it twice does not add extra time. These tools are available only to the SQL Editor and the server, never to app users.
 
 ## Recovery-key design
 
