@@ -813,6 +813,10 @@ h3,
   flex-wrap: wrap;
   gap: 8px;
 }
+/* The payment dialog opens from the plan screen (z-index 40), so it must sit above it. */
+#payment-dialog {
+  z-index: 60;
+}
 .payment-dialog-card {
   display: grid;
   gap: 10px;
