@@ -477,13 +477,14 @@ h3,
   .sidebar {
     position: fixed;
     z-index: 31;
-    inset: env(safe-area-inset-top) auto env(safe-area-inset-bottom) 0;
+    /* Top and bottom insets alone size the panel to the visible screen.
+       A fixed 100vh height on top of them pushed Log out off the bottom. */
+    inset: env(safe-area-inset-top) auto 0 0;
     width: min(280px, 82vw);
-    height: 100vh;
-    height: 100dvh;
+    max-height: calc(100dvh - env(safe-area-inset-top));
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: 22px 16px;
+    padding: 22px 16px calc(22px + env(safe-area-inset-bottom));
     display: flex;
     flex-direction: column;
     align-items: stretch;
@@ -1351,4 +1352,8 @@ canvas {
   .table-wrap > table.data-table td[colspan]::before {
     display: none;
   }
+}
+/* Hide the login form for a moment while a recent session reopens. */
+.resuming #auth-screen {
+  visibility: hidden;
 }

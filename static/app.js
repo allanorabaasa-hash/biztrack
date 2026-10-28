@@ -1035,6 +1035,7 @@ window.addEventListener("offline", async () => {
   setSyncStatus("offline", local?.last_synced_at);
 });
 document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") markActive(true);
   if (document.visibilityState === "visible") syncWorkspace();
 });
 const saveProfile = async ({ id, email, name }) => {
@@ -2673,7 +2674,36 @@ document.querySelectorAll("[data-recovery-unlock]").forEach((button) => {
 let lockedAccount = null;
 let inactivityTimer;
 const INACTIVITY_LOCK_MS = 30 * 60 * 1000;
+// Remembers who was using the app and when, so coming back from the
+// background (even if Android closed the app to save memory) reopens the
+// workspace without a password. After 30 minutes away, the password is asked
+// again, same as the in-app inactivity lock. Logging out always clears it.
+const ACTIVE_MARKER_KEY = "biztrack-last-active";
+let lastMarkedAt = 0;
+const markActive = (force = false) => {
+  if (!activeUser) return;
+  const now = Date.now();
+  if (!force && now - lastMarkedAt < 15000) return;
+  lastMarkedAt = now;
+  try {
+    localStorage.setItem(
+      ACTIVE_MARKER_KEY,
+      JSON.stringify({ userId: activeUser.id, at: now }),
+    );
+  } catch {
+    // Without storage the user simply logs in again next time.
+  }
+};
+const clearActiveMarker = () => {
+  lastMarkedAt = 0;
+  try {
+    localStorage.removeItem(ACTIVE_MARKER_KEY);
+  } catch {
+    // Nothing to clear.
+  }
+};
 const resetInactivityTimer = () => {
+  markActive();
   clearTimeout(inactivityTimer);
   if (
     !activeUser ||
@@ -2682,6 +2712,7 @@ const resetInactivityTimer = () => {
     return;
   inactivityTimer = setTimeout(async () => {
     if (!activeUser) return;
+    clearActiveMarker();
     lockedAccount = {
       id: activeUser.id,
       email: activeUser.email,
@@ -2759,6 +2790,7 @@ document.getElementById("logout-button").addEventListener("click", async () => {
       : window.confirm(
           "Remove this device's offline data? Choose Cancel to keep offline access.",
         );
+  clearActiveMarker();
   try {
     if (navigator.onLine && supabaseClient) await supabaseClient.auth.signOut();
   } finally {
@@ -3473,3 +3505,58 @@ if ("serviceWorker" in navigator && !isNativeApp) {
       console.warn("Service worker registration failed:", error),
     );
 }
+
+// Reopen the workspace if this device was in use within the last 30 minutes.
+const resumeRecentSession = async () => {
+  let marker = null;
+  try {
+    marker = JSON.parse(localStorage.getItem(ACTIVE_MARKER_KEY) || "null");
+  } catch {
+    marker = null;
+  }
+  if (!marker?.userId) return false;
+  if (!(Date.now() - marker.at < INACTIVITY_LOCK_MS)) {
+    clearActiveMarker();
+    return false;
+  }
+  const local = await localWorkspace(marker.userId);
+  const key = local?.cachedKey;
+  if (!key || typeof key !== "object") return false;
+  if (local.encrypted_data) {
+    try {
+      await decryptPayload(local.encrypted_data, key);
+    } catch {
+      clearActiveMarker();
+      return false;
+    }
+  }
+  let session = null;
+  if (supabaseClient) {
+    try {
+      session = (await supabaseClient.auth.getSession()).data.session;
+    } catch {
+      session = null;
+    }
+  }
+  if (session && session.user?.id !== marker.userId) return false;
+  await beginSession(
+    {
+      ...local,
+      id: local.user_id,
+      plan: local.plan || "",
+      session,
+      legacyPasswordKey: local.data_key_wrapped
+        ? null
+        : local.legacyPasswordKey || null,
+      dataKeyWrapped: local.data_key_wrapped || null,
+      recoveryKeyWrapped: local.recovery_key_wrapped || null,
+    },
+    key,
+  );
+  if (navigator.onLine) refreshAccessFromServer();
+  return true;
+};
+document.documentElement.classList.add("resuming");
+resumeRecentSession()
+  .catch((error) => console.warn("Could not reopen the last session:", error))
+  .finally(() => document.documentElement.classList.remove("resuming"));
