@@ -12,7 +12,7 @@
     <link rel="icon" type="image/svg+xml" href="./static/icons/logo-mark.svg" />
     <link rel="icon" type="image/png" sizes="192x192" href="./static/icons/icon-192.png" />
     <title>BizTrack</title>
-    <link rel="stylesheet" href="static/app.css?v=11" />
+    <link rel="stylesheet" href="static/app.css?v=12" />
   </head>
   <body>
     <section id="auth-screen" class="auth-screen">
@@ -265,6 +265,18 @@
         </button>
         <button class="nav-item" type="button" data-tab="news">News</button>
         <div class="sidebar-footer">
+          <button
+            id="profile-button"
+            class="profile-chip"
+            type="button"
+            aria-haspopup="dialog"
+          >
+            <span id="profile-chip-avatar" class="avatar" aria-hidden="true"></span>
+            <span class="profile-chip-text">
+              <strong id="profile-chip-name">Your profile</strong>
+              <small id="profile-chip-username">Add your details</small>
+            </span>
+          </button>
           <div id="account-plan" class="account-plan"></div>
           <div class="sync-status" id="sync-status" aria-live="polite">
             Not synced
@@ -846,6 +858,63 @@
         </div>
       </form>
     </div>
+    <div
+      id="profile-dialog"
+      class="dialog-backdrop hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="profile-dialog-title"
+    >
+      <form id="profile-form" class="dialog-card profile-card" novalidate>
+        <h2 id="profile-dialog-title">Your profile</h2>
+        <div class="profile-photo-row">
+          <span id="profile-avatar-preview" class="avatar avatar-lg" aria-hidden="true"></span>
+          <div class="profile-photo-actions">
+            <label class="btn small secondary" for="profile-photo-input">Change photo</label>
+            <input
+              id="profile-photo-input"
+              class="visually-hidden"
+              type="file"
+              accept="image/*"
+            />
+            <button id="profile-photo-remove" class="text-button" type="button">
+              Remove photo
+            </button>
+          </div>
+        </div>
+        <label for="profile-name">Full name</label>
+        <input id="profile-name" name="name" autocomplete="name" maxlength="80" required />
+        <label for="profile-username">Username</label>
+        <div class="input-prefix">
+          <span aria-hidden="true">@</span>
+          <input
+            id="profile-username"
+            name="username"
+            autocomplete="username"
+            autocapitalize="none"
+            spellcheck="false"
+            maxlength="30"
+            placeholder="yourname"
+            aria-describedby="profile-username-hint"
+          />
+        </div>
+        <small id="profile-username-hint" class="field-hint">3–30 letters, numbers, dots or underscores.</small>
+        <label for="profile-email">Email</label>
+        <input id="profile-email" type="email" readonly aria-describedby="profile-email-hint" />
+        <small id="profile-email-hint" class="field-hint">Your login email. It can't be changed here.</small>
+        <label for="profile-phone">Phone number</label>
+        <input id="profile-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" placeholder="0772 123 456" />
+        <label for="profile-location">Town or city</label>
+        <input id="profile-location" name="location" autocomplete="address-level2" maxlength="80" placeholder="e.g. Fort Portal" />
+        <label for="profile-bio">About you or your business</label>
+        <textarea id="profile-bio" name="bio" rows="3" maxlength="280" placeholder="What do you sell or do?"></textarea>
+        <p id="profile-message" class="auth-message" role="status"></p>
+        <div class="dialog-actions">
+          <button id="profile-cancel" class="btn secondary" type="button">Cancel</button>
+          <button id="profile-save" class="btn" type="submit">Save profile</button>
+        </div>
+      </form>
+    </div>
     <div id="business-context-menu" class="context-menu hidden" role="menu">
       <button type="button" data-action="rename">Rename business</button>
       <button type="button" data-action="delete" class="danger">
@@ -876,6 +945,6 @@
     </div>
     <script src="./static/vendor/supabase-2.56.0.min.js" defer></script>
     <script src="static/supabase-config.js" defer></script>
-    <script src="static/app.js?v=35" defer></script>
+    <script src="static/app.js?v=36" defer></script>
   </body>
 </html>

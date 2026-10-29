@@ -923,14 +923,53 @@ h3,
   color: var(--good);
 }
 @media (max-width: 560px) {
-  .access-banner {
+  .access-banner.ended {
     align-items: stretch;
     flex-direction: column;
   }
-  .access-actions {
+  .access-banner.ended .access-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
   }
+}
+/* Slim one-line banner while a trial or plan is active */
+.access-banner.compact {
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 6px 6px 6px 12px;
+  border-color: #f1d3a1;
+  border-radius: 999px;
+  font-size: 13px;
+}
+.access-banner.compact > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.access-banner.compact strong {
+  font-size: 13px;
+}
+.access-banner.compact span {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.access-banner.compact .payment-status-list,
+.access-banner.compact #export-data-button {
+  display: none;
+}
+.access-banner.compact .access-actions {
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+}
+.access-banner.compact #access-pay-button {
+  min-height: 36px;
+  padding: 6px 14px;
+  border-radius: 999px;
 }
 .stat-label {
   font-size: 12px;
@@ -1388,4 +1427,144 @@ canvas {
 /* Hide the login form for a moment while a recent session reopens. */
 .resuming #auth-screen {
   visibility: hidden;
+}
+/* ---------- Profile ---------- */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.avatar {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--amber) center / cover no-repeat;
+  color: #12201e;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+}
+.avatar-lg {
+  width: 84px;
+  height: 84px;
+  font-size: 30px;
+}
+.profile-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  margin: 0 0 12px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.profile-chip:hover,
+.profile-chip:focus-visible {
+  background: rgba(255, 255, 255, 0.14);
+}
+.profile-chip-text {
+  display: grid;
+  min-width: 0;
+}
+.profile-chip-text strong,
+.profile-chip-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-chip-text small {
+  color: #cfe3df;
+  font-size: 12px;
+}
+#profile-dialog {
+  z-index: 60;
+}
+.profile-card {
+  display: grid;
+  gap: 6px;
+  width: min(460px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+.profile-card label {
+  margin-top: 6px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.profile-card textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: 13.5px "Inter", sans-serif;
+  resize: vertical;
+}
+.profile-photo-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 4px 0 6px;
+}
+.profile-photo-actions {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+}
+.profile-photo-actions label {
+  margin: 0;
+}
+.input-prefix {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.input-prefix span {
+  padding: 0 0 0 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.input-prefix input,
+.profile-card .input-prefix input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  outline: none;
+  padding-left: 4px;
+}
+.input-prefix:focus-within {
+  outline: 2px solid var(--teal);
+  outline-offset: 1px;
+}
+.field-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.profile-card input[readonly] {
+  background: var(--bg);
+  color: var(--muted);
+}
+.profile-photo-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  margin: 0;
+  cursor: pointer;
 }

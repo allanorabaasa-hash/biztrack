@@ -77,6 +77,18 @@ const accessState = (account = activeUser) => {
       : 0,
   };
 };
+// "6 days left", "5 hours left", "less than an hour left". Rounds down so the
+// count visibly goes down each day (rounding up showed 7 days for a whole day).
+const timeLeftLabel = (expiresAt) => {
+  const ms = Math.max(0, Number(expiresAt) - Date.now());
+  const days = Math.floor(ms / 86400000);
+  if (days >= 1) return `${days} day${days === 1 ? "" : "s"} left`;
+  const hours = Math.floor(ms / 3600000);
+  if (hours >= 1) return `${hours} hour${hours === 1 ? "" : "s"} left`;
+  return "less than an hour left";
+};
+const shortDate = (time) =>
+  new Date(time).toLocaleDateString(undefined, { day: "numeric", month: "short" });
 const isReadOnly = () =>
   Boolean(activeUser) && accessState().access === "read_only";
 const requireWriteAccess = () => {
@@ -1047,7 +1059,9 @@ const saveProfile = async ({ id, email, name }) => {
       name: String(name || "").trim(),
       updated_at: new Date().toISOString(),
     },
-    { onConflict: "user_id" },
+    // Only creates the profile the first time. Edits made in the Profile
+    // screen are never overwritten by logging in again.
+    { onConflict: "user_id", ignoreDuplicates: true },
   );
   if (error) throw error;
 };
@@ -1963,6 +1977,7 @@ const beginSession = async (account, key) => {
     updatePlanUI();
     refreshAccessBanner();
     loadPaymentStatuses();
+    loadProfile();
     await loadBusinesses();
     resetInactivityTimer();
     syncWorkspace();
@@ -1973,6 +1988,7 @@ const beginSession = async (account, key) => {
   }
 };
 const openWorkspaceFromLocal = async () => {
+  loadProfile();
   document.getElementById("lock-screen").classList.add("hidden");
   document.getElementById("auth-screen").classList.add("hidden");
   document.getElementById("plan-screen").classList.add("hidden");
@@ -1996,9 +2012,9 @@ const showPlanSelection = () => {
             state.access === "trial"
               ? "Basic trial"
               : PLAN_CONFIG[state.plan]?.name || "Plan"
-          }: ${state.daysLeft} day${
-            state.daysLeft === 1 ? "" : "s"
-          } remaining.`;
+          }: ${timeLeftLabel(state.expiresAt)} (ends ${shortDate(
+            state.expiresAt,
+          )}).`;
   }
   const cards = document.querySelectorAll("[data-plan-card]");
   cards.forEach((card) => {
@@ -2040,27 +2056,29 @@ const refreshAccessBanner = () => {
       Math.min(Math.max(state.expiresAt - Date.now() + 50, 0), 2147480000),
     );
   }
-  banner.classList.toggle(
-    "hidden",
-    !ended && state.access !== "trial" && state.access !== "paid",
-  );
+  // Active Premium: nothing to upgrade to, so no banner at all.
+  // Active Basic or Pro: one slim line with an Upgrade button.
+  // Ended: the full notice with Pay and Export.
+  const premiumActive = !ended && state.plan === "premium";
+  banner.classList.toggle("hidden", premiumActive);
+  banner.classList.toggle("compact", !ended);
+  banner.classList.toggle("ended", ended);
   const message = document.getElementById("access-banner-message");
   const days = document.getElementById("access-days-left");
   if (message) {
     message.textContent = ended
       ? "Your free trial / plan has ended. Your data is safe. Pay to continue adding records."
-      : `${
-          state.access === "trial"
-            ? "Basic trial"
-            : PLAN_CONFIG[state.plan]?.name || "Plan"
-        } active`;
+      : state.access === "trial"
+      ? "Basic trial"
+      : PLAN_CONFIG[state.plan]?.name.replace("BizTrack ", "") || "Your plan";
   }
-  if (days)
+  if (days) {
     days.textContent = ended
       ? "Your workspace is read-only."
-      : `${state.daysLeft} day${state.daysLeft === 1 ? "" : "s"} left.`;
+      : `${timeLeftLabel(state.expiresAt)} · ends ${shortDate(state.expiresAt)}`;
+  }
   const payButton = document.getElementById("access-pay-button");
-  if (payButton) payButton.textContent = ended ? "Pay" : "Upgrade / renew";
+  if (payButton) payButton.textContent = ended ? "Pay" : "Upgrade";
   document
     .querySelectorAll(
       "#business-form, #rename-business-form, #txn-form, #product-form, #market-form, #invoice-form",
@@ -2084,6 +2102,9 @@ const refreshAccessBanner = () => {
       control.disabled = ended;
     });
 };
+setInterval(() => {
+  if (activeUser && document.visibilityState === "visible") refreshAccessBanner();
+}, 60000);
 const exportWorkspace = async () => {
   const store = await readStore();
   const blob = new Blob(
@@ -2353,6 +2374,188 @@ document
     event.preventDefault();
     startPayment();
   });
+// ---------------------------------------------------------------------------
+// Profile: name, username, photo, phone, town and a short bio.
+// Stored in biztrack_profiles (not encrypted, unlike business records), and
+// cached on the device so the menu shows it offline.
+// ---------------------------------------------------------------------------
+const PROFILE_FIELDS = "name, username, email, phone, location, bio, avatar_url";
+let currentProfile = null;
+let pendingAvatar; // undefined = unchanged, null = removed, string = new photo
+const profileCacheKey = (userId) => `biztrack-profile-${userId}`;
+const initials = (text) =>
+  String(text || "")
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "")
+    .join("") || "?";
+const paintAvatar = (element, photo, label) => {
+  if (!element) return;
+  if (photo) {
+    element.style.backgroundImage = `url("${photo}")`;
+    element.textContent = "";
+  } else {
+    element.style.backgroundImage = "";
+    element.textContent = initials(label);
+  }
+};
+const renderProfileChip = () => {
+  const profile = currentProfile || {};
+  const name = profile.name || activeUser?.email || "Your profile";
+  paintAvatar(document.getElementById("profile-chip-avatar"), profile.avatar_url, name);
+  const nameEl = document.getElementById("profile-chip-name");
+  const userEl = document.getElementById("profile-chip-username");
+  if (nameEl) nameEl.textContent = name;
+  if (userEl)
+    userEl.textContent = profile.username
+      ? `@${profile.username}`
+      : "Add your details";
+};
+const loadProfile = async () => {
+  if (!activeUser) return;
+  const userId = activeUser.id;
+  try {
+    currentProfile = JSON.parse(localStorage.getItem(profileCacheKey(userId)) || "null");
+  } catch {
+    currentProfile = null;
+  }
+  renderProfileChip();
+  if (!navigator.onLine || !supabaseClient) return;
+  const { data, error } = await supabaseClient
+    .from("biztrack_profiles")
+    .select(PROFILE_FIELDS)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !data || activeUser?.id !== userId) return;
+  currentProfile = data;
+  try {
+    localStorage.setItem(profileCacheKey(userId), JSON.stringify(data));
+  } catch {
+    // A large photo may not fit; the menu falls back to initials offline.
+  }
+  renderProfileChip();
+};
+// Shrinks a chosen photo to a 256 px square JPEG (about 20–40 KB).
+const resizePhoto = async (file) => {
+  if (!file.type.startsWith("image/")) throw new Error("Choose an image file.");
+  if (file.size > 15 * 1024 * 1024) throw new Error("That photo is too large. Choose one under 15 MB.");
+  const bitmap = await createImageBitmap(file);
+  const side = Math.min(bitmap.width, bitmap.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  canvas
+    .getContext("2d")
+    .drawImage(
+      bitmap,
+      (bitmap.width - side) / 2,
+      (bitmap.height - side) / 2,
+      side,
+      side,
+      0,
+      0,
+      256,
+      256,
+    );
+  bitmap.close?.();
+  return canvas.toDataURL("image/jpeg", 0.82);
+};
+const profileEl = (id) => document.getElementById(`profile-${id}`);
+const openProfileDialog = () => {
+  if (!activeUser) return;
+  if (typeof closeMobileMenu === "function") closeMobileMenu();
+  const profile = currentProfile || {};
+  pendingAvatar = undefined;
+  profileEl("name").value = profile.name || "";
+  profileEl("username").value = profile.username || "";
+  profileEl("email").value = profile.email || activeUser.email || "";
+  profileEl("phone").value = profile.phone || "";
+  profileEl("location").value = profile.location || "";
+  profileEl("bio").value = profile.bio || "";
+  profileEl("message").textContent = "";
+  profileEl("message").classList.remove("error");
+  paintAvatar(profileEl("avatar-preview"), profile.avatar_url, profile.name || activeUser.email);
+  profileEl("dialog").classList.remove("hidden");
+  profileEl("name").focus();
+};
+const closeProfileDialog = () => profileEl("dialog").classList.add("hidden");
+const profileError = (text) => {
+  profileEl("message").textContent = text;
+  profileEl("message").classList.add("error");
+};
+document.getElementById("profile-button")?.addEventListener("click", openProfileDialog);
+document.getElementById("profile-cancel")?.addEventListener("click", closeProfileDialog);
+document.getElementById("profile-photo-input")?.addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    pendingAvatar = await resizePhoto(file);
+    paintAvatar(profileEl("avatar-preview"), pendingAvatar, profileEl("name").value);
+    profileEl("message").textContent = "";
+  } catch (error) {
+    profileError(error.message || "That photo could not be used.");
+  }
+});
+document.getElementById("profile-photo-remove")?.addEventListener("click", () => {
+  pendingAvatar = null;
+  paintAvatar(profileEl("avatar-preview"), null, profileEl("name").value || activeUser?.email);
+});
+document.getElementById("profile-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!activeUser) return;
+  const name = profileEl("name").value.trim();
+  const username = profileEl("username").value.trim().replace(/^@/, "").toLowerCase();
+  if (!name) return profileError("Enter your name.");
+  if (username && !/^[a-z0-9_.]{3,30}$/.test(username))
+    return profileError("Usernames use 3–30 letters, numbers, dots or underscores, with no spaces.");
+  if (!navigator.onLine || !supabaseClient)
+    return profileError("Connect to the internet to save your profile.");
+  const changes = {
+    name,
+    username: username || null,
+    phone: profileEl("phone").value.trim() || null,
+    location: profileEl("location").value.trim() || null,
+    bio: profileEl("bio").value.trim() || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (pendingAvatar !== undefined) changes.avatar_url = pendingAvatar;
+  const saveButton = profileEl("save");
+  saveButton.disabled = true;
+  saveButton.textContent = "Saving…";
+  try {
+    const { data, error } = await supabaseClient
+      .from("biztrack_profiles")
+      .update(changes)
+      .eq("user_id", activeUser.id)
+      .select(PROFILE_FIELDS)
+      .maybeSingle();
+    if (error) {
+      if (error.code === "23505") throw new Error("That username is already taken. Try another.");
+      if (error.code === "23514") throw new Error("Please check your details: one of them is too long or not allowed.");
+      if (error.code === "42501" || error.code === "42703")
+        throw new Error("Profiles aren't switched on yet. Please try again later.");
+      throw new Error("Your profile could not be saved. Try again.");
+    }
+    if (!data) throw new Error("Your profile could not be saved. Log in again and retry.");
+    currentProfile = data;
+    try {
+      localStorage.setItem(profileCacheKey(activeUser.id), JSON.stringify(data));
+    } catch {
+      // Not cached; it reloads next time online.
+    }
+    supabaseClient.auth.updateUser({ data: { name } }).catch(() => {});
+    renderProfileChip();
+    closeProfileDialog();
+    showToast("Profile saved.");
+  } catch (error) {
+    profileError(error.message);
+  } finally {
+    saveButton.disabled = false;
+    saveButton.textContent = "Save profile";
+  }
+});
 const showAuthError = (error, fallback) => {
   if (error?.message === "Supabase is not configured.") {
     authMessage(
@@ -2799,6 +3002,8 @@ document.getElementById("logout-button").addEventListener("click", async () => {
     activeUser = null;
     activePlan = "";
     currentBusinessId = "";
+    currentProfile = null;
+    renderProfileChip();
     document.querySelector(".app").classList.add("hidden");
     document.getElementById("plan-screen").classList.add("hidden");
     document.getElementById("auth-screen").classList.remove("hidden");
