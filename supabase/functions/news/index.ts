@@ -47,60 +47,65 @@ const normalizeSummary = (value: string) => {
   return summary.length > 200 ? `${summary.slice(0, 197).trim()}...` : summary;
 };
 
-const isValidFeedUrl = async (url: string) => {
-  try {
-    const response = await fetch(url, { headers: { "User-Agent": "BizTrackNews/1.0" }, redirect: "follow" });
-    if (!response.ok) return false;
-    const text = await response.text();
-    return /<\s*(rss|feed|rdf)[\s>]/i.test(text) || /<\s*entry[\s>]/i.test(text);
-  } catch {
-    return false;
+// Text from a feed field that may be a string, a number or an {#text} object.
+const textOf = (value: unknown): string => {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return textOf(value[0]);
+  if (typeof value === "object") {
+    const v = value as Record<string, unknown>;
+    return textOf(v["#text"] ?? v["@_href"] ?? v.href ?? "");
   }
+  return String(value);
+};
+
+const safeIso = (value: unknown) => {
+  const date = new Date(textOf(value));
+  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+};
+
+type NewsItem = { title: string; link: string; source: string; published: string; summary: string };
+
+// One feed: one request, 8 seconds at most. A broken feed returns nothing
+// instead of failing the whole News section.
+const readFeed = async (feed: { name: string; url: string }): Promise<NewsItem[]> => {
+  const response = await fetch(feed.url, {
+    headers: { "User-Agent": "BizTrackNews/1.0" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) return [];
+  const xml = await response.text();
+  if (!/<\s*(rss|feed|rdf|entry)[\s>:]/i.test(xml)) return [];
+  const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", parseTagValue: true, trimValues: true });
+  const doc = parser.parse(xml);
+  const channels = [doc?.rss?.channel, doc?.feed, doc?.["rdf:RDF"], doc?.rdf?.channel].filter(Boolean);
+  const entries: any[] = [];
+  for (const channel of channels) {
+    const list = channel?.item ?? channel?.entry ?? [];
+    if (Array.isArray(list)) entries.push(...list);
+    else if (list) entries.push(list);
+  }
+  const items: NewsItem[] = [];
+  for (const item of entries) {
+    const title = textOf(item.title ?? item?.["media:title"]).trim() || "Untitled";
+    const link = textOf(item.link ?? item.guid ?? item.id).trim();
+    if (!link.startsWith("http")) continue;
+    const description = textOf(item.description ?? item.summary ?? item["content:encoded"] ?? item.content);
+    items.push({
+      title,
+      link,
+      source: feed.name,
+      published: safeIso(item.pubDate ?? item.published ?? item.updated ?? item["dc:date"]),
+      summary: normalizeSummary(description || title),
+    });
+  }
+  return items;
 };
 
 const fetchFeedEntries = async () => {
-  const validFeeds = [] as Array<{ name: string; url: string }>;
-  for (const feed of FEEDS) {
-    const ok = await isValidFeedUrl(feed.url);
-    if (ok) validFeeds.push(feed);
-  }
-  if (!validFeeds.length) {
-    throw new Error("No valid feed URLs were reachable.");
-  }
-  const items: Array<{ title: string; link: string; source: string; published: string; summary: string }> = [];
-  for (const feed of validFeeds) {
-    try {
-      const response = await fetch(feed.url, { headers: { "User-Agent": "BizTrackNews/1.0" }, redirect: "follow" });
-      if (!response.ok) continue;
-      const xml = await response.text();
-      const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", parseTagValue: true, trimValues: true, parseNodeValue: true });
-      const doc = parser.parse(xml);
-      const channels = [doc?.rss?.channel, doc?.feed, doc?.rdf?.channel].filter(Boolean);
-      const entries = [] as any[];
-      for (const channel of channels) {
-        const list = channel?.item ?? channel?.entry ?? [];
-        if (Array.isArray(list)) entries.push(...list);
-        else if (list) entries.push(list);
-      }
-      for (const item of entries) {
-        const title = item.title ?? item?."media:title" ?? "Untitled";
-        const link = item.link?.['@_href'] ?? item.link ?? item.guid ?? item.id ?? "";
-        const pub = item.pubDate || item.published || item.updated || item['dc:date'] || new Date().toISOString();
-        const description = item.description ?? item.summary ?? item.content ?? item['content:encoded'] ?? "";
-        const cleanedLink = Array.isArray(link) ? link[0] : (typeof link === "object" ? link?.['@_href'] ?? link?.href ?? "" : link);
-        if (!cleanedLink) continue;
-        items.push({
-          title: String(title).trim(),
-          link: String(cleanedLink).trim(),
-          source: feed.name,
-          published: new Date(pub).toISOString(),
-          summary: normalizeSummary(String(description || title)),
-        });
-      }
-    } catch {
-      continue;
-    }
-  }
+  const results = await Promise.allSettled(FEEDS.map(readFeed));
+  const items = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+  if (!items.length) throw new Error("No news sources could be reached right now.");
 
   const cleaned = Array.from(
     new Map(
