@@ -2545,10 +2545,10 @@ document.getElementById("profile-form")?.addEventListener("submit", async (event
   event.preventDefault();
   if (!activeUser) return;
   const name = profileEl("name").value.trim();
-  const username = profileEl("username").value.trim().replace(/^@/, "").toLowerCase();
+  const username = profileEl("username").value.trim().replace(/^@/, "").trim();
   if (!name) return profileError("Enter your name.");
-  if (username && !/^[a-z0-9_.]{3,30}$/.test(username))
-    return profileError("Usernames use 3–30 letters, numbers, dots or underscores, with no spaces.");
+  if (username.includes("@") || username.length > 50)
+    return profileError("Usernames can be up to 50 characters and can't contain @.");
   if (!navigator.onLine || !supabaseClient)
     return profileError("Connect to the internet to save your profile.");
   const changes = {
@@ -2571,7 +2571,7 @@ document.getElementById("profile-form")?.addEventListener("submit", async (event
       .select(PROFILE_FIELDS)
       .maybeSingle();
     if (error) {
-      if (error.code === "23505") throw new Error("That username is already taken. Try another.");
+      if (error.code === "23505") throw new Error("That username is already taken (capital letters don't count as different). Try another.");
       if (error.code === "23514") throw new Error("Please check your details: one of them is too long or not allowed.");
       if (error.code === "42501" || error.code === "42703")
         throw new Error("Profiles aren't switched on yet. Please try again later.");
@@ -2649,7 +2649,7 @@ document.getElementById("reset-form")?.addEventListener("submit", async (event) 
   const submit = form.querySelector('button[type="submit"]');
   const password = String(form.password.value);
   const code = String(form.code.value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
-  if (password.length < 10) return authMessage("Use a password with at least 10 characters.");
+  if (password.length < 6) return authMessage("Use a password with at least 6 characters.");
   submit.disabled = true;
   try {
     const {
@@ -2779,7 +2779,18 @@ deleteEl("form")?.addEventListener("submit", async (event) => {
     submit.textContent = "Delete forever";
   }
 });
+const friendlyAuthError = (message = "") => {
+  if (/password should be at least|weak password|password is too short/i.test(message))
+    return "That password is too short. Use at least 6 characters.";
+  if (/invalid.*email|email.*invalid|unable to validate email/i.test(message))
+    return "That email doesn't look right. Check it, or leave it empty and sign up with just a username.";
+  if (/already registered|already been registered|user already exists/i.test(message))
+    return "There's already an account with that email. Log in instead.";
+  return "";
+};
 const showAuthError = (error, fallback) => {
+  const friendly = friendlyAuthError(error?.message);
+  if (friendly) return authMessage(friendly);
   if (error?.message === "Supabase is not configured.") {
     authMessage(
       "Supabase is not configured. Add your project URL and anon key in static/supabase-config.js.",
@@ -2812,16 +2823,19 @@ document
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.currentTarget));
     const name = String(values.name || "").trim();
-    const username = String(values.username || "").trim().replace(/^@/, "").toLowerCase();
+    const username = String(values.username || "").trim().replace(/^@/, "").trim();
     const email = String(values.email || "").trim().toLowerCase();
     const password = String(values.password);
     if (!name) return authMessage("Enter your name.");
     if (!username && !email)
       return authMessage("Enter a username or an email (or both).");
-    if (username && !/^[a-z0-9_.]{3,30}$/.test(username))
-      return authMessage("Usernames use 3–30 letters, numbers, dots or underscores, with no spaces.");
-    if (password.length < 10)
-      return authMessage("Use a password with at least 10 characters.");
+    if (username.includes("@") || username.length > 50)
+      return authMessage("Usernames can be up to 50 characters and can't contain @.");
+    if (email && !/^[^\s@]+@[^\s@]+$/.test(email))
+      return authMessage("That email doesn't look right. Check it, or leave it empty and sign up with just a username.");
+    // Supabase's own minimum. Longer passwords protect the encrypted records better.
+    if (password.length < 6)
+      return authMessage("Use a password with at least 6 characters.");
     try {
       if (!navigator.onLine)
         throw new Error("Connect to the internet for first-time signup.");
@@ -2912,7 +2926,8 @@ document
     authMessage();
     const values = Object.fromEntries(new FormData(event.currentTarget));
     try {
-      const email = String(values.email).trim().replace(/^@/, "").toLowerCase();
+      const typed = String(values.email).trim().replace(/^@/, "").trim();
+      const email = typed.toLowerCase();
       const byUsername = !email.includes("@");
       if (!navigator.onLine) {
         const known = await findLocalAccount(email);
@@ -3039,9 +3054,9 @@ document
         name: data.user.user_metadata?.name,
       });
       await beginSession(account, keyBundle.dataKey);
-      rememberLogin(email);
+      rememberLogin(typed);
       if (byUsername)
-        await saveLocalWorkspace({ ...(await localWorkspace(data.user.id)), username: email });
+        await saveLocalWorkspace({ ...(await localWorkspace(data.user.id)), username: typed });
       showRecoveryCode(keyBundle.recoveryCode);
     } catch (error) {
       const email = String(values.email || "")

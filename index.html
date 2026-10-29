@@ -12,7 +12,7 @@
     <link rel="icon" type="image/svg+xml" href="./static/icons/logo-mark.svg" />
     <link rel="icon" type="image/png" sizes="192x192" href="./static/icons/icon-192.png" />
     <title>BizTrack</title>
-    <link rel="stylesheet" href="static/app.css?v=15" />
+    <link rel="stylesheet" href="static/app.css?v=16" />
   </head>
   <body>
     <section id="auth-screen" class="auth-screen">
@@ -89,18 +89,21 @@
                   autocomplete="username"
                   autocapitalize="none"
                   spellcheck="false"
-                  maxlength="30"
-                  placeholder="yourname"
+                  maxlength="50"
+                  placeholder="e.g. Mama Rose"
                 />
               </div>
-              <small class="field-hint">3–30 letters, numbers, dots or underscores. Good if you don't use email.</small>
+              <small class="field-hint">Any name you like, without @. Good if you don't use email.</small>
             </div>
             <div>
               <label for="signup-email">Email</label
               ><input
                 id="signup-email"
                 name="email"
-                type="email"
+                type="text"
+                inputmode="email"
+                autocapitalize="none"
+                spellcheck="false"
                 autocomplete="email"
                 aria-describedby="signup-email-hint"
               />
@@ -112,7 +115,7 @@
                 <input
                   name="password"
                   type="password"
-                  minlength="10"
+                  minlength="6"
                   autocomplete="new-password"
                   required
                 />
@@ -155,7 +158,7 @@
                 id="reset-password"
                 name="password"
                 type="password"
-                minlength="10"
+                minlength="6"
                 autocomplete="new-password"
                 required
               />
@@ -972,12 +975,12 @@
             autocomplete="username"
             autocapitalize="none"
             spellcheck="false"
-            maxlength="30"
-            placeholder="yourname"
+            maxlength="50"
+            placeholder="e.g. Mama Rose"
             aria-describedby="profile-username-hint"
           />
         </div>
-        <small id="profile-username-hint" class="field-hint">3–30 letters, numbers, dots or underscores.</small>
+        <small id="profile-username-hint" class="field-hint">Any name you like, without @. You can log in with it.</small>
         <label for="profile-email">Email</label>
         <input id="profile-email" type="email" readonly aria-describedby="profile-email-hint" />
         <small id="profile-email-hint" class="field-hint">Your login email. It can't be changed here. You can always log in with your username too.</small>
@@ -1075,6 +1078,6 @@
     </div>
     <script src="./static/vendor/supabase-2.56.0.min.js" defer></script>
     <script src="static/supabase-config.js" defer></script>
-    <script src="static/app.js?v=39" defer></script>
+    <script src="static/app.js?v=40" defer></script>
   </body>
 </html>

@@ -7,8 +7,8 @@
 // Deploy with JWT verification OFF (people call it before they are signed in).
 //
 // Supabase sign-in needs an email address, so an account created with only a
-// username gets an internal address <username>@<USERNAME_EMAIL_DOMAIN> that
-// never receives mail and is never shown to the user. Accounts created with a
+// username gets an internal address u<random id>@<USERNAME_EMAIL_DOMAIN> that
+// never receives mail and is never shown to the user (u<random id>@domain). Accounts created with a
 // real email can also sign in by username once they set one in their profile.
 //
 // Optional secret: USERNAME_EMAIL_DOMAIN (default users.biztrack.invalid; the
@@ -25,7 +25,9 @@ const allowedOrigins = [
   "http://127.0.0.1:8000",
   "http://127.0.0.1:8080",
 ];
-const USERNAME_RE = /^[a-z0-9_.]{3,30}$/;
+// Usernames can be anything 1-50 characters long, except they can't contain
+// "@" (that's how the login screen tells an email from a username).
+const MIN_PASSWORD = 6; // Supabase's own minimum
 const MAX_FAILED_LOGINS = 8; // per username per 15 minutes
 const MAX_SIGNUPS = 30; // username-only signups, all users, per 10 minutes
 
@@ -58,18 +60,19 @@ Deno.serve(async (req: Request) => {
   } catch {
     return json({ error: "Invalid request." }, 400, origin);
   }
-  const username = String(body.username || "").trim().replace(/^@/, "").toLowerCase();
-  if (!USERNAME_RE.test(username))
-    return json({ error: "Usernames use 3–30 letters, numbers, dots or underscores." }, 400, origin);
+  // As typed (for display), and its lowercase lookup key.
+  const username = String(body.username || "").trim().replace(/^@/, "").trim();
+  const usernameKey = username.toLowerCase();
+  if (!username || username.length > 50 || username.includes("@"))
+    return json({ error: "Usernames can be up to 50 characters and can't contain @." }, 400, origin);
 
   const admin = createClient(url, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } });
-  // Usernames are stored in lowercase (a database rule enforces it), so an
-  // exact match is a case-insensitive match.
+  // username_key is lower(trim(username)), so this match ignores capitals.
   const exactProfile = async () => {
     const { data, error } = await admin
       .from("biztrack_profiles")
       .select("user_id, email")
-      .eq("username", username)
+      .eq("username_key", usernameKey)
       .maybeSingle();
     if (error) throw error;
     return data;
@@ -96,7 +99,7 @@ Deno.serve(async (req: Request) => {
         .from("biztrack_auth_attempts")
         .select("id", { count: "exact", head: true })
         .eq("kind", "login_failed")
-        .eq("username", username)
+        .eq("username", usernameKey)
         .gte("created_at", minutesAgo(15));
       if ((count || 0) >= MAX_FAILED_LOGINS)
         return json({ error: "Too many wrong attempts. Wait 15 minutes and try again." }, 429, origin);
@@ -104,11 +107,11 @@ Deno.serve(async (req: Request) => {
       const profile = await exactProfile();
       const session = profile?.email && password ? await signIn(profile.email, password) : null;
       if (!session) {
-        await admin.from("biztrack_auth_attempts").insert({ kind: "login_failed", username });
+        await admin.from("biztrack_auth_attempts").insert({ kind: "login_failed", username: usernameKey });
         // Same answer whether the username exists or not.
         return json({ error: "Wrong username or password." }, 401, origin);
       }
-      await admin.from("biztrack_auth_attempts").delete().eq("kind", "login_failed").eq("username", username);
+      await admin.from("biztrack_auth_attempts").delete().eq("kind", "login_failed").eq("username", usernameKey);
       return json({ session }, 200, origin);
     }
 
@@ -116,7 +119,8 @@ Deno.serve(async (req: Request) => {
       const password = String(body.password || "");
       const name = String(body.name || "").trim().slice(0, 80);
       const salt = String(body.salt || "");
-      if (password.length < 10) return json({ error: "Use a password with at least 10 characters." }, 400, origin);
+      if (password.length < MIN_PASSWORD)
+        return json({ error: `Use a password with at least ${MIN_PASSWORD} characters.` }, 400, origin);
       if (!name) return json({ error: "Enter your name." }, 400, origin);
       if (!/^[A-Za-z0-9+/]{22}==$/.test(salt)) return json({ error: "Invalid request." }, 400, origin);
 
@@ -129,7 +133,9 @@ Deno.serve(async (req: Request) => {
         return json({ error: "Lots of people are signing up right now. Try again in a few minutes." }, 429, origin);
       if (await exactProfile()) return json({ error: "That username is taken. Try another." }, 409, origin);
 
-      const email = `${username}@${domain}`;
+      // Usernames may contain spaces or symbols, so the internal address uses
+      // a random id instead.
+      const email = `u${crypto.randomUUID().replace(/-/g, "")}@${domain}`;
       const { data: created, error: createError } = await admin.auth.admin.createUser({
         email,
         password,
@@ -145,7 +151,7 @@ Deno.serve(async (req: Request) => {
           origin,
         );
       }
-      await admin.from("biztrack_auth_attempts").insert({ kind: "signup", username });
+      await admin.from("biztrack_auth_attempts").insert({ kind: "signup", username: usernameKey });
       const { error: profileError } = await admin.from("biztrack_profiles").insert({
         user_id: created.user.id,
         email,

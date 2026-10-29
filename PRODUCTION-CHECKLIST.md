@@ -6,7 +6,8 @@ Everything the code can do is done. These are the steps only you can do: account
 
 ### Deploy
 - [ ] SQL Editor: run `supabase/migrations/20261029_002_profile_details.sql` (if not done yet), then `20261029_003_password_reset.sql`, then `notify pgrst, 'reload schema';`
-- [ ] SQL Editor: run `20261029_004_username_login.sql`
+- [ ] SQL Editor: run `20261029_004_username_login.sql`, then `20261029_005_free_usernames.sql`
+- [ ] Authentication → Sign In / Providers → Email (or Auth → Policies): **Minimum password length 6**, and no required character types. The app allows 6+ characters; Supabase can't go lower.
 - [ ] Edge Functions: deploy **`username-auth`** from `supabase/functions/username-auth/index.ts` with JWT verification **off** (people use it before they're signed in)
 - [ ] Test: sign up with a username and no email. If it fails with an email error, Supabase is rejecting the internal address: add the secret `USERNAME_EMAIL_DOMAIN` set to a domain you own later (e.g. `users.biztrack.ug`), and tell me
 - [ ] Edge Functions: deploy **`delete-account`** from `supabase/functions/delete-account/index.ts` (leave JWT verification **on**)
