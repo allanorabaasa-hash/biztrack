@@ -7,7 +7,14 @@ const webDir = path.join(root, "www");
 fs.rmSync(webDir, { recursive: true, force: true });
 fs.mkdirSync(webDir, { recursive: true });
 
-for (const file of ["index.html", "manifest.webmanifest", "sw.js"]) {
+for (const file of [
+  "index.html",
+  "manifest.webmanifest",
+  "sw.js",
+  "privacy.html",
+  "terms.html",
+  "delete-account.html",
+]) {
   fs.copyFileSync(path.join(root, file), path.join(webDir, file));
 }
 fs.cpSync(path.join(root, "static"), path.join(webDir, "static"), {

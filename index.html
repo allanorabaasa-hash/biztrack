@@ -12,7 +12,7 @@
     <link rel="icon" type="image/svg+xml" href="./static/icons/logo-mark.svg" />
     <link rel="icon" type="image/png" sizes="192x192" href="./static/icons/icon-192.png" />
     <title>BizTrack</title>
-    <link rel="stylesheet" href="static/app.css?v=12" />
+    <link rel="stylesheet" href="static/app.css?v=13" />
   </head>
   <body>
     <section id="auth-screen" class="auth-screen">
@@ -52,6 +52,9 @@
             </div>
             <button class="btn" type="submit">Log in</button>
           </form>
+          <button id="forgot-password" class="text-button" type="button">
+            Forgot password?
+          </button>
           <button id="show-signup" class="text-button" type="button">
             Create an account
           </button>
@@ -100,13 +103,66 @@
                 </button>
               </div>
             </div>
+            <label class="agree-row">
+              <input name="agree" type="checkbox" required />
+              <span>
+                I agree to the
+                <a href="https://allanorabaasa-hash.github.io/biztrack/terms.html" target="_blank" rel="noopener">Terms</a>
+                and
+                <a href="https://allanorabaasa-hash.github.io/biztrack/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.
+              </span>
+            </label>
             <button class="btn" type="submit">Create account</button>
           </form>
           <button id="show-login" class="text-button" type="button">
             I already have an account
           </button>
         </div>
+        <div id="reset-panel" class="hidden">
+          <h1>Choose a new password</h1>
+          <p>
+            Your records are encrypted, so enter the recovery code you saved
+            when you created your account. It unlocks your data with the new
+            password.
+          </p>
+          <form id="reset-form" class="inline">
+            <div>
+              <label for="reset-password">New password</label>
+              <input
+                id="reset-password"
+                name="password"
+                type="password"
+                minlength="10"
+                autocomplete="new-password"
+                required
+              />
+            </div>
+            <div>
+              <label for="reset-code">Recovery code</label>
+              <input
+                id="reset-code"
+                name="code"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
+                placeholder="XXXX-XXXX-XXXX-XXXX"
+              />
+            </div>
+            <button class="btn" type="submit">Save new password</button>
+          </form>
+          <p class="field-hint">
+            Lost your recovery code? Your old records can't be unlocked by
+            anyone. To start fresh,
+            <a href="https://allanorabaasa-hash.github.io/biztrack/delete-account.html" target="_blank" rel="noopener">ask us to delete the account</a>
+            and sign up again.
+          </p>
+        </div>
         <p id="auth-message" class="auth-message" role="status"></p>
+        <p class="legal-links">
+          <a href="https://allanorabaasa-hash.github.io/biztrack/privacy.html" target="_blank" rel="noopener">Privacy</a>
+          ·
+          <a href="https://allanorabaasa-hash.github.io/biztrack/terms.html" target="_blank" rel="noopener">Terms</a>
+        </p>
       </div>
     </section>
     <section id="lock-screen" class="auth-screen hidden">
@@ -913,6 +969,57 @@
           <button id="profile-cancel" class="btn secondary" type="button">Cancel</button>
           <button id="profile-save" class="btn" type="submit">Save profile</button>
         </div>
+        <div class="profile-danger">
+          <p class="legal-links">
+            <a href="https://allanorabaasa-hash.github.io/biztrack/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
+            ·
+            <a href="https://allanorabaasa-hash.github.io/biztrack/terms.html" target="_blank" rel="noopener">Terms</a>
+          </p>
+          <button id="delete-account-open" class="text-button danger-text" type="button">
+            Delete my account
+          </button>
+        </div>
+      </form>
+    </div>
+    <div
+      id="delete-dialog"
+      class="dialog-backdrop hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-dialog-title"
+    >
+      <form id="delete-form" class="dialog-card profile-card">
+        <h2 id="delete-dialog-title">Delete your account?</h2>
+        <p>
+          This permanently deletes your BizTrack account, your profile and
+          <strong>all your business records</strong>, on this device and online.
+          It cannot be undone. Export your data first if you want a copy.
+        </p>
+        <button id="delete-export" class="btn small secondary" type="button">
+          Export my data first
+        </button>
+        <label for="delete-password">Your password</label>
+        <input
+          id="delete-password"
+          name="password"
+          type="password"
+          autocomplete="current-password"
+          required
+        />
+        <label for="delete-confirm">Type DELETE to confirm</label>
+        <input
+          id="delete-confirm"
+          name="confirm"
+          autocomplete="off"
+          autocapitalize="characters"
+          spellcheck="false"
+          required
+        />
+        <p id="delete-message" class="auth-message error" role="status"></p>
+        <div class="dialog-actions">
+          <button id="delete-cancel" class="btn secondary" type="button">Keep my account</button>
+          <button id="delete-submit" class="btn danger" type="submit">Delete forever</button>
+        </div>
       </form>
     </div>
     <div id="business-context-menu" class="context-menu hidden" role="menu">
@@ -945,6 +1052,6 @@
     </div>
     <script src="./static/vendor/supabase-2.56.0.min.js" defer></script>
     <script src="static/supabase-config.js" defer></script>
-    <script src="static/app.js?v=36" defer></script>
+    <script src="static/app.js?v=37" defer></script>
   </body>
 </html>

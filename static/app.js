@@ -180,6 +180,10 @@ const hasSupabaseConfig =
   /^https:\/\/[^/]+\.supabase\.co$/.test(supabaseConfig.url || "") &&
   Boolean(supabaseConfig.anonKey) &&
   !supabaseConfig.anonKey.includes("YOUR_");
+// Opened from a "reset your password" email? (Read before Supabase clears the URL.)
+const openedFromResetLink = /type=recovery/.test(
+  `${window.location.hash}${window.location.search}`,
+);
 const supabaseClient =
   hasSupabaseConfig && window.supabase?.createClient
     ? window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey)
@@ -1906,6 +1910,7 @@ const authMessage = (message = "") => {
 const showAuthPanel = (signup) => {
   document.getElementById("login-panel").classList.toggle("hidden", signup);
   document.getElementById("signup-panel").classList.toggle("hidden", !signup);
+  document.getElementById("reset-panel")?.classList.add("hidden");
   authMessage();
 };
 const beginSession = async (account, key) => {
@@ -2556,6 +2561,184 @@ document.getElementById("profile-form")?.addEventListener("submit", async (event
     saveButton.textContent = "Save profile";
   }
 });
+// ---------------------------------------------------------------------------
+// Forgot password. Business data is encrypted, so a new password alone can't
+// open it: the recovery code unwraps the data key, which is then wrapped
+// again with the new password.
+// ---------------------------------------------------------------------------
+const unwrapRawKey = async (wrapped, wrappingKey) => {
+  const payload = JSON.parse(wrapped);
+  return crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(payload.iv) },
+    wrappingKey,
+    base64ToBytes(payload.data),
+  );
+};
+const showResetPanel = () => {
+  document.getElementById("auth-screen").classList.remove("hidden");
+  document.getElementById("login-panel").classList.add("hidden");
+  document.getElementById("signup-panel").classList.add("hidden");
+  document.getElementById("reset-panel").classList.remove("hidden");
+  authMessage();
+  document.getElementById("reset-password").focus();
+};
+if (openedFromResetLink) showResetPanel();
+supabaseClient?.auth.onAuthStateChange((event) => {
+  if (event === "PASSWORD_RECOVERY") showResetPanel();
+});
+document.getElementById("forgot-password")?.addEventListener("click", async () => {
+  const email = document
+    .querySelector('#login-form input[name="email"]')
+    .value.trim()
+    .toLowerCase();
+  if (!email) return authMessage("Enter your email above, then tap Forgot password.");
+  if (!navigator.onLine || !supabaseClient)
+    return authMessage("Connect to the internet to reset your password.");
+  const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+    redirectTo: "https://allanorabaasa-hash.github.io/biztrack/",
+  });
+  authMessage(
+    error
+      ? "Could not send the reset email. Wait a minute and try again."
+      : "If that email has an account, a reset link is on its way. Open it on any device, and have your recovery code ready.",
+  );
+});
+document.getElementById("reset-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = form.querySelector('button[type="submit"]');
+  const password = String(form.password.value);
+  const code = String(form.code.value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+  if (password.length < 10) return authMessage("Use a password with at least 10 characters.");
+  submit.disabled = true;
+  try {
+    const {
+      data: { session },
+    } = await supabaseClient.auth.getSession();
+    if (!session) throw new Error("This reset link has expired. Request a new one from the login screen.");
+    const user = session.user;
+    const { data: workspace, error: readError } = await supabaseClient
+      .from("biztrack_workspaces")
+      .select("salt, data_key_wrapped, recovery_key_wrapped")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (readError) throw new Error("Could not load your account. Check your connection and try again.");
+    let newWrapped = null;
+    if (workspace?.data_key_wrapped) {
+      if (!code) throw new Error("Enter the recovery code you saved when you created your account.");
+      if (!workspace.recovery_key_wrapped)
+        throw new Error("This account has no recovery code saved. Contact support.");
+      const recovery = JSON.parse(workspace.recovery_key_wrapped);
+      let rawKey;
+      try {
+        rawKey = await unwrapRawKey(recovery.wrapped, (await deriveKey(code, recovery.salt)).key);
+      } catch {
+        throw new Error("That recovery code is not correct. Check it and try again.");
+      }
+      const salt = workspace.salt || user.user_metadata?.salt;
+      newWrapped = await wrapRawKey(rawKey, (await deriveKey(password, salt)).key);
+      const { error: keyError } = await supabaseClient.rpc("biztrack_set_password_key", {
+        p_wrapped: newWrapped,
+      });
+      if (keyError) throw new Error("Could not update your data key. Try again.");
+    } else if (workspace) {
+      throw new Error("This older account needs your old password. Contact support.");
+    }
+    const { error: passwordError } = await supabaseClient.auth.updateUser({ password });
+    if (passwordError) {
+      if (newWrapped && workspace?.data_key_wrapped)
+        await supabaseClient.rpc("biztrack_set_password_key", {
+          p_wrapped: workspace.data_key_wrapped,
+        });
+      throw new Error(passwordError.message || "Could not change your password.");
+    }
+    const local = await localWorkspace(user.id);
+    if (local && newWrapped) await saveLocalWorkspace({ ...local, data_key_wrapped: newWrapped });
+    clearActiveMarker();
+    await supabaseClient.auth.signOut({ scope: "local" });
+    history.replaceState(null, "", window.location.pathname);
+    form.reset();
+    showAuthPanel(false);
+    const loginEmail = document.querySelector('#login-form input[name="email"]');
+    if (loginEmail) loginEmail.value = user.email || "";
+    authMessage("Password changed. Log in with your new password.");
+  } catch (error) {
+    authMessage(error.message);
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Delete my account (required by Google Play).
+// ---------------------------------------------------------------------------
+const deleteEl = (id) => document.getElementById(`delete-${id}`);
+const resetToLoggedOut = () => {
+  activeUser = null;
+  activePlan = "";
+  currentBusinessId = "";
+  currentProfile = null;
+  renderProfileChip();
+  document.querySelector(".app").classList.add("hidden");
+  document.getElementById("plan-screen").classList.add("hidden");
+  document.getElementById("auth-screen").classList.remove("hidden");
+  showAuthPanel(false);
+};
+document.getElementById("delete-account-open")?.addEventListener("click", () => {
+  closeProfileDialog();
+  deleteEl("form").reset();
+  deleteEl("message").textContent = "";
+  deleteEl("dialog").classList.remove("hidden");
+  deleteEl("password").focus();
+});
+deleteEl("cancel")?.addEventListener("click", () => deleteEl("dialog").classList.add("hidden"));
+deleteEl("export")?.addEventListener("click", () =>
+  exportWorkspace().catch((error) => showToast(error.message, true)),
+);
+deleteEl("form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!activeUser) return;
+  const message = deleteEl("message");
+  if (deleteEl("confirm").value.trim().toUpperCase() !== "DELETE")
+    return (message.textContent = "Type DELETE to confirm.");
+  if (!navigator.onLine || !supabaseClient)
+    return (message.textContent = "Connect to the internet to delete your account.");
+  const submit = deleteEl("submit");
+  submit.disabled = true;
+  submit.textContent = "Deleting…";
+  const userId = activeUser.id;
+  try {
+    // Confirm it's really the owner: sign in again with the password.
+    const { error: authError } = await supabaseClient.auth.signInWithPassword({
+      email: activeUser.email,
+      password: deleteEl("password").value,
+    });
+    if (authError) throw new Error("That password is not correct.");
+    await invokeFunction("delete-account", { confirm: "DELETE" });
+    await removeLocalWorkspace(userId);
+    for (const key of [
+      profileCacheKey(userId),
+      getBusinessStorageKey(userId),
+      PHONE_KEY,
+    ]) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        // Nothing stored.
+      }
+    }
+    clearActiveMarker();
+    await supabaseClient.auth.signOut({ scope: "local" }).catch(() => {});
+    deleteEl("dialog").classList.add("hidden");
+    resetToLoggedOut();
+    showToast("Your account and all its data have been deleted.");
+  } catch (error) {
+    message.textContent = error.message || "Your account could not be deleted.";
+  } finally {
+    submit.disabled = false;
+    submit.textContent = "Delete forever";
+  }
+});
 const showAuthError = (error, fallback) => {
   if (error?.message === "Supabase is not configured.") {
     authMessage(
@@ -2610,10 +2793,15 @@ document
         },
       });
       if (error) throw error;
-      if (!data.user || !data.session)
+      if (!data.user || !data.session) {
+        // Email confirmation is on: the account is set up on first login.
+        showAuthPanel(false);
+        const loginEmail = document.querySelector('#login-form input[name="email"]');
+        if (loginEmail) loginEmail.value = email;
         return authMessage(
-          "Account created, but email confirmation is enabled. Disable Confirm email in Supabase Authentication settings, then create the account again.",
+          "Account created. Check your email and tap the confirmation link, then log in here.",
         );
+      }
       const account = { id: data.user.id, email, salt };
       await saveProfile({
         id: data.user.id,
@@ -3713,6 +3901,7 @@ if ("serviceWorker" in navigator && !isNativeApp) {
 
 // Reopen the workspace if this device was in use within the last 30 minutes.
 const resumeRecentSession = async () => {
+  if (openedFromResetLink) return false;
   let marker = null;
   try {
     marker = JSON.parse(localStorage.getItem(ACTIVE_MARKER_KEY) || "null");

@@ -149,4 +149,36 @@ The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. To in
 
 Set `ANDROID_HOME` to `$HOME/Android/Sdk` on Kali and use Android Studio's embedded JDK 21 (or another JDK 21) for Gradle. Capacitor 8 requires Java 21.
 
+### Release build for Google Play
+
+Google Play needs a **signed Android App Bundle (.aab)**. You sign it with your own *upload key*.
+
+1. Create the upload key once, **outside** the project folder (run from `~/Desktop/folders`):
+
+   ```bash
+   keytool -genkeypair -v -keystore biztrack-upload.jks -alias biztrack \
+     -keyalg RSA -keysize 2048 -validity 10000
+   ```
+
+   Choose a strong password and answer the name questions. **Back up `biztrack-upload.jks` and its password** (e.g. a USB drive and a password manager). If you lose it, you must ask Google to reset your upload key before you can publish updates.
+
+2. Copy `android/keystore.properties.example` to `android/keystore.properties` and fill in the passwords. This file is git-ignored.
+
+3. Bump the version for every Play upload (Play rejects a repeated version code):
+
+   ```bash
+   npm run version:patch      # 1.0.0 -> 1.0.1 (versionCode 10001)
+   ```
+
+4. Build:
+
+   ```bash
+   npm run android:release
+   ```
+
+   - Play Store bundle: `android/app/build/outputs/bundle/release/app-release.aab`
+   - Signed APK for sharing directly: `android/app/build/outputs/apk/release/app-release.apk`
+
+Enrol in **Play App Signing** when you create the app (the default): Google keeps the final signing key and your upload key can be reset if lost.
+
 Keep Supabase auth confirmation and password-reset email redirects on the GitHub Pages site (`https://allanorabaasa-hash.github.io/biztrack/`) and allowlist that URL under Supabase Authentication > URL Configuration. Native deep links can be added later with an Android App Link or custom URL scheme, an Android intent filter, Capacitor App's `appUrlOpen` / `getLaunchUrl` handlers, and the app link added to Supabase's Redirect URLs.
