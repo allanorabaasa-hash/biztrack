@@ -6,6 +6,9 @@ Everything the code can do is done. These are the steps only you can do: account
 
 ### Deploy
 - [ ] SQL Editor: run `supabase/migrations/20261029_002_profile_details.sql` (if not done yet), then `20261029_003_password_reset.sql`, then `notify pgrst, 'reload schema';`
+- [ ] SQL Editor: run `20261029_004_username_login.sql`
+- [ ] Edge Functions: deploy **`username-auth`** from `supabase/functions/username-auth/index.ts` with JWT verification **off** (people use it before they're signed in)
+- [ ] Test: sign up with a username and no email. If it fails with an email error, Supabase is rejecting the internal address: add the secret `USERNAME_EMAIL_DOMAIN` set to a domain you own later (e.g. `users.biztrack.ug`), and tell me
 - [ ] Edge Functions: deploy **`delete-account`** from `supabase/functions/delete-account/index.ts` (leave JWT verification **on**)
 - [ ] Edge Functions: deploy **`news`** from `supabase/functions/news/index.ts` (the Premium News section needs it)
 - [ ] Check `payments` still has JWT verification **off**, and `select-plan` has it **on**
@@ -13,7 +16,7 @@ Everything the code can do is done. These are the steps only you can do: account
 ### Authentication settings
 - [ ] Authentication → URL Configuration → **Site URL**: `https://allanorabaasa-hash.github.io/biztrack/`
 - [ ] **Redirect URLs**: add `https://allanorabaasa-hash.github.io/biztrack/` and `https://allanorabaasa-hash.github.io/biztrack/*`
-- [ ] Authentication → Sign In / Providers → Email: turn **Confirm email** on (the app now handles it: new users confirm, then log in)
+- [ ] Authentication → Sign In / Providers → Email: leave **Confirm email off** for now, so people can start straight away. Email is optional at signup, and many users will use only a username.
 - [ ] Authentication → Emails → **SMTP Settings**: set up a real email sender. Supabase's built-in sender is only for testing and sends just a few emails per hour, so confirmation and password-reset emails will stop arriving once you have users. Free options include Brevo (300 emails a day) or Resend. You need a sending address, ideally on your own domain.
 - [ ] Authentication → Emails → Templates: change "Confirm signup" and "Reset password" to mention BizTrack
 

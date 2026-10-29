@@ -116,6 +116,26 @@ const invokeFunction = async (name, body) => {
   failure.payload = payload;
   throw failure;
 };
+// Accounts made with only a username get an internal email ending in
+// ".invalid" that never receives mail and is never shown.
+const isInternalEmail = (email) => /\.invalid$/i.test(String(email || ""));
+const LAST_LOGIN_KEY = "biztrack-last-login";
+const rememberLogin = (identifier) => {
+  try {
+    if (identifier) localStorage.setItem(LAST_LOGIN_KEY, identifier);
+  } catch {
+    // Only a convenience.
+  }
+};
+// Username sign-in / sign-up through the username-auth function, then hand
+// the session to Supabase so the rest of the app works as with email.
+const usernameSession = async (body) => {
+  const result = await invokeFunction("username-auth", body);
+  if (!result?.session) throw new Error(result?.error || "Please log in.");
+  const { data, error } = await supabaseClient.auth.setSession(result.session);
+  if (error || !data.user) throw new Error("Could not sign you in. Try again.");
+  return data;
+};
 // Store the server's view of this user's access (plan, trial, expiry).
 const applyAccess = async (access) => {
   if (!activeUser || !access) return;
@@ -424,8 +444,11 @@ const findLocalAccount = async (email) => {
       .getAll();
     request.onsuccess = () =>
       resolve(
-        request.result.find((item) => item.email?.toLowerCase() === email) ||
-          null,
+        request.result.find(
+          (item) =>
+            item.email?.toLowerCase() === email ||
+            (item.username && item.username.toLowerCase() === email),
+        ) || null,
       );
     request.onerror = () => reject(request.error);
   });
@@ -2407,7 +2430,8 @@ const paintAvatar = (element, photo, label) => {
 };
 const renderProfileChip = () => {
   const profile = currentProfile || {};
-  const name = profile.name || activeUser?.email || "Your profile";
+  const email = isInternalEmail(activeUser?.email) ? "" : activeUser?.email;
+  const name = profile.name || (profile.username && `@${profile.username}`) || email || "Your profile";
   paintAvatar(document.getElementById("profile-chip-avatar"), profile.avatar_url, name);
   const nameEl = document.getElementById("profile-chip-name");
   const userEl = document.getElementById("profile-chip-username");
@@ -2434,6 +2458,12 @@ const loadProfile = async () => {
     .maybeSingle();
   if (error || !data || activeUser?.id !== userId) return;
   currentProfile = data;
+  if (data.username) {
+    // Lets this device unlock offline with the username too.
+    const local = await localWorkspace(userId);
+    if (local && local.username !== data.username)
+      await saveLocalWorkspace({ ...local, username: data.username });
+  }
   try {
     localStorage.setItem(profileCacheKey(userId), JSON.stringify(data));
   } catch {
@@ -2474,7 +2504,11 @@ const openProfileDialog = () => {
   pendingAvatar = undefined;
   profileEl("name").value = profile.name || "";
   profileEl("username").value = profile.username || "";
-  profileEl("email").value = profile.email || activeUser.email || "";
+  const loginEmail = profile.email || activeUser.email || "";
+  profileEl("email").value = isInternalEmail(loginEmail) ? "" : loginEmail;
+  profileEl("email").placeholder = isInternalEmail(loginEmail)
+    ? "None: you log in with your username"
+    : "";
   profileEl("phone").value = profile.phone || "";
   profileEl("location").value = profile.location || "";
   profileEl("bio").value = profile.bio || "";
@@ -2545,6 +2579,8 @@ document.getElementById("profile-form")?.addEventListener("submit", async (event
     }
     if (!data) throw new Error("Your profile could not be saved. Log in again and retry.");
     currentProfile = data;
+    const local = await localWorkspace(activeUser.id);
+    if (local) await saveLocalWorkspace({ ...local, username: data.username || null });
     try {
       localStorage.setItem(profileCacheKey(activeUser.id), JSON.stringify(data));
     } catch {
@@ -2592,6 +2628,10 @@ document.getElementById("forgot-password")?.addEventListener("click", async () =
     .value.trim()
     .toLowerCase();
   if (!email) return authMessage("Enter your email above, then tap Forgot password.");
+  if (!email.includes("@"))
+    return authMessage(
+      "Reset emails need an email address. Enter the email on your account, or if you signed up with only a username, email orallan19@gmail.com from your phone's email app and we'll help.",
+    );
   if (!navigator.onLine || !supabaseClient)
     return authMessage("Connect to the internet to reset your password.");
   const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
@@ -2771,12 +2811,15 @@ document
   .addEventListener("submit", async (event) => {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.currentTarget));
-    const email = String(values.email).trim().toLowerCase();
+    const name = String(values.name || "").trim();
+    const username = String(values.username || "").trim().replace(/^@/, "").toLowerCase();
+    const email = String(values.email || "").trim().toLowerCase();
     const password = String(values.password);
-    if (!email || password.length < 10)
-      return authMessage(
-        "Use a valid email and a password with at least 10 characters.",
-      );
+    if (!name) return authMessage("Enter your name.");
+    if (!/^[a-z0-9_.]{3,30}$/.test(username))
+      return authMessage("Usernames use 3–30 letters, numbers, dots or underscores, with no spaces.");
+    if (password.length < 10)
+      return authMessage("Use a password with at least 10 characters.");
     try {
       if (!navigator.onLine)
         throw new Error("Connect to the internet for first-time signup.");
@@ -2784,38 +2827,78 @@ document
       const salt = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
       const passwordKeys = await deriveKey(password, salt);
       const keyBundle = await createDataKeyBundle(passwordKeys.key);
-      const { data, error } = await supabaseClient.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: authRedirectUrl,
-          data: { name: String(values.name).trim(), salt },
-        },
-      });
-      if (error) throw error;
-      if (!data.user || !data.session) {
-        // Email confirmation is on: the account is set up on first login.
-        showAuthPanel(false);
-        const loginEmail = document.querySelector('#login-form input[name="email"]');
-        if (loginEmail) loginEmail.value = email;
-        return authMessage(
-          "Account created. Check your email and tap the confirmation link, then log in here.",
+      let user;
+      if (email) {
+        const free = await invokeFunction("username-auth", { action: "available", username }).catch(
+          () => ({ available: true }),
         );
+        if (!free.available) throw new Error("That username is taken. Try another.");
+        const { data, error } = await supabaseClient.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: authRedirectUrl,
+            data: { name, salt, username },
+          },
+        });
+        if (error) throw error;
+        if (!data.user || !data.session) {
+          // Email confirmation is on: the account is set up on first login.
+          showAuthPanel(false);
+          document.getElementById("login-identifier").value = email;
+          return authMessage(
+            "Account created. Check your email and tap the confirmation link, then log in here.",
+          );
+        }
+        user = data.user;
+        await saveProfile({ id: user.id, email, name });
+        const { error: nameError } = await supabaseClient
+          .from("biztrack_profiles")
+          .update({ username, updated_at: new Date().toISOString() })
+          .eq("user_id", user.id);
+        if (nameError) console.warn("Username not saved; add it in your profile:", nameError);
+      } else {
+        // No email: the server creates the account (see username-auth).
+        user = (await usernameSession({ action: "signup", username, password, name, salt })).user;
       }
-      const account = { id: data.user.id, email, salt };
-      await saveProfile({
-        id: data.user.id,
-        email,
-        name: values.name,
-      });
+      rememberLogin(username);
+      const account = { id: user.id, email: user.email, salt };
       account.dataKeyWrapped = keyBundle.dataKeyWrapped;
       account.recoveryKeyWrapped = keyBundle.recoveryKeyWrapped;
       await beginSession(account, keyBundle.dataKey);
+      await saveLocalWorkspace({ ...(await localWorkspace(user.id)), username });
       showRecoveryCode(keyBundle.recoveryCode);
     } catch (error) {
       showAuthError(error, "Could not create your account.");
     }
   });
+const relockWithRecoveryCode = async (workspace, passwordKey) => {
+  if (!workspace?.recovery_key_wrapped)
+    throw new Error("Your records are locked with an old password. Contact support.");
+  const entered = window.prompt(
+    "Your password was changed. Enter your recovery code once to unlock your records with the new password:",
+  );
+  const code = String(entered || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+  if (!code) throw new Error("Recovery code needed to unlock your records.");
+  const recovery = JSON.parse(workspace.recovery_key_wrapped);
+  let rawKey;
+  try {
+    rawKey = await unwrapRawKey(recovery.wrapped, (await deriveKey(code, recovery.salt)).key);
+  } catch {
+    throw new Error("That recovery code is not correct.");
+  }
+  const dataKeyWrapped = await wrapRawKey(rawKey, passwordKey);
+  const { error } = await supabaseClient.rpc("biztrack_set_password_key", {
+    p_wrapped: dataKeyWrapped,
+  });
+  if (error) throw new Error("Could not update your records' lock. Try again.");
+  return {
+    dataKey: await unwrapDataKey(dataKeyWrapped, passwordKey),
+    dataKeyWrapped,
+    recoveryKeyWrapped: workspace.recovery_key_wrapped,
+    recoveryCode: null,
+  };
+};
 document
   .getElementById("login-form")
   .addEventListener("submit", async (event) => {
@@ -2823,7 +2906,8 @@ document
     authMessage();
     const values = Object.fromEntries(new FormData(event.currentTarget));
     try {
-      const email = String(values.email).trim().toLowerCase();
+      const email = String(values.email).trim().replace(/^@/, "").toLowerCase();
+      const byUsername = !email.includes("@");
       if (!navigator.onLine) {
         const known = await findLocalAccount(email);
         if (!known)
@@ -2854,11 +2938,21 @@ document
         return;
       }
       if (!supabaseClient) throw new Error("Supabase is not configured.");
-      const { data, error } = await supabaseClient.auth.signInWithPassword({
-        email,
-        password: String(values.password),
-      });
-      if (error) throw error;
+      let data;
+      if (byUsername) {
+        data = await usernameSession({
+          action: "login",
+          username: email,
+          password: String(values.password),
+        });
+      } else {
+        const result = await supabaseClient.auth.signInWithPassword({
+          email,
+          password: String(values.password),
+        });
+        if (result.error) throw result.error;
+        data = result.data;
+      }
       if (!data.user) throw new Error("Your account could not be found.");
       // Check access first: it starts the 7-day trial for accounts that have
       // never had one, which the workspace key upgrade below may need.
@@ -2900,7 +2994,10 @@ document
             recoveryCode: null,
           };
         } catch {
-          throw new Error("Wrong password.");
+          // Sign-in accepted this password, so the data key is still locked
+          // with an older one (e.g. support reset the password). The recovery
+          // code unlocks it and re-locks it with the current password.
+          keyBundle = await relockWithRecoveryCode(workspace, passwordKeys.key);
         }
       } else {
         keyBundle = await migrateLegacyWorkspace({
@@ -2936,6 +3033,9 @@ document
         name: data.user.user_metadata?.name,
       });
       await beginSession(account, keyBundle.dataKey);
+      rememberLogin(email);
+      if (byUsername)
+        await saveLocalWorkspace({ ...(await localWorkspace(data.user.id)), username: email });
       showRecoveryCode(keyBundle.recoveryCode);
     } catch (error) {
       const email = String(values.email || "")
@@ -2991,7 +3091,7 @@ document
       }
       showAuthError(
         error,
-        "Incorrect email or password, or private data could not be unlocked.",
+        "Wrong email/username or password.",
       );
     }
   });
@@ -3064,11 +3164,12 @@ document.querySelectorAll("[data-recovery-unlock]").forEach((button) => {
 
 let lockedAccount = null;
 let inactivityTimer;
-const INACTIVITY_LOCK_MS = 30 * 60 * 1000;
-// Remembers who was using the app and when, so coming back from the
-// background (even if Android closed the app to save memory) reopens the
-// workspace without a password. After 30 minutes away, the password is asked
-// again, same as the in-app inactivity lock. Logging out always clears it.
+// Users stay signed in until they tap Log out (no automatic lock). Set a
+// number of milliseconds here to bring back an inactivity lock.
+const INACTIVITY_LOCK_MS = null;
+// Remembers who was signed in on this device, so reopening the app (even
+// after Android closed it in the background) goes straight to the workspace.
+// Logging out or deleting the account clears it.
 const ACTIVE_MARKER_KEY = "biztrack-last-active";
 let lastMarkedAt = 0;
 const markActive = (force = false) => {
@@ -3096,6 +3197,7 @@ const clearActiveMarker = () => {
 const resetInactivityTimer = () => {
   markActive();
   clearTimeout(inactivityTimer);
+  if (!INACTIVITY_LOCK_MS) return;
   if (
     !activeUser ||
     document.querySelector(".app")?.classList.contains("hidden")
@@ -3909,7 +4011,7 @@ const resumeRecentSession = async () => {
     marker = null;
   }
   if (!marker?.userId) return false;
-  if (!(Date.now() - marker.at < INACTIVITY_LOCK_MS)) {
+  if (INACTIVITY_LOCK_MS && !(Date.now() - marker.at < INACTIVITY_LOCK_MS)) {
     clearActiveMarker();
     return false;
   }
@@ -3950,6 +4052,13 @@ const resumeRecentSession = async () => {
   if (navigator.onLine) refreshAccessFromServer();
   return true;
 };
+try {
+  const lastLogin = localStorage.getItem(LAST_LOGIN_KEY);
+  const loginField = document.getElementById("login-identifier");
+  if (lastLogin && loginField && !loginField.value) loginField.value = lastLogin;
+} catch {
+  // Nothing remembered.
+}
 document.documentElement.classList.add("resuming");
 resumeRecentSession()
   .catch((error) => console.warn("Could not reopen the last session:", error))

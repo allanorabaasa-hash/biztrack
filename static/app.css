@@ -1628,3 +1628,13 @@ canvas {
   display: block;
   margin-top: 12px;
 }
+.optional {
+  color: var(--muted);
+  font-weight: 400;
+}
+#signup-form .input-prefix input {
+  border: 0;
+  outline: none;
+  padding-left: 4px;
+  background: transparent;
+}
