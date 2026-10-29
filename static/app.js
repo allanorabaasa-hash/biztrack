@@ -2816,7 +2816,9 @@ document
     const email = String(values.email || "").trim().toLowerCase();
     const password = String(values.password);
     if (!name) return authMessage("Enter your name.");
-    if (!/^[a-z0-9_.]{3,30}$/.test(username))
+    if (!username && !email)
+      return authMessage("Enter a username or an email (or both).");
+    if (username && !/^[a-z0-9_.]{3,30}$/.test(username))
       return authMessage("Usernames use 3–30 letters, numbers, dots or underscores, with no spaces.");
     if (password.length < 10)
       return authMessage("Use a password with at least 10 characters.");
@@ -2829,16 +2831,18 @@ document
       const keyBundle = await createDataKeyBundle(passwordKeys.key);
       let user;
       if (email) {
-        const free = await invokeFunction("username-auth", { action: "available", username }).catch(
-          () => ({ available: true }),
-        );
-        if (!free.available) throw new Error("That username is taken. Try another.");
+        if (username) {
+          const free = await invokeFunction("username-auth", { action: "available", username }).catch(
+            () => ({ available: true }),
+          );
+          if (!free.available) throw new Error("That username is taken. Try another.");
+        }
         const { data, error } = await supabaseClient.auth.signUp({
           email,
           password,
           options: {
             emailRedirectTo: authRedirectUrl,
-            data: { name, salt, username },
+            data: username ? { name, salt, username } : { name, salt },
           },
         });
         if (error) throw error;
@@ -2852,21 +2856,23 @@ document
         }
         user = data.user;
         await saveProfile({ id: user.id, email, name });
-        const { error: nameError } = await supabaseClient
-          .from("biztrack_profiles")
-          .update({ username, updated_at: new Date().toISOString() })
-          .eq("user_id", user.id);
-        if (nameError) console.warn("Username not saved; add it in your profile:", nameError);
+        if (username) {
+          const { error: nameError } = await supabaseClient
+            .from("biztrack_profiles")
+            .update({ username, updated_at: new Date().toISOString() })
+            .eq("user_id", user.id);
+          if (nameError) console.warn("Username not saved; add it in your profile:", nameError);
+        }
       } else {
         // No email: the server creates the account (see username-auth).
         user = (await usernameSession({ action: "signup", username, password, name, salt })).user;
       }
-      rememberLogin(username);
+      rememberLogin(username || email);
       const account = { id: user.id, email: user.email, salt };
       account.dataKeyWrapped = keyBundle.dataKeyWrapped;
       account.recoveryKeyWrapped = keyBundle.recoveryKeyWrapped;
       await beginSession(account, keyBundle.dataKey);
-      await saveLocalWorkspace({ ...(await localWorkspace(user.id)), username });
+      if (username) await saveLocalWorkspace({ ...(await localWorkspace(user.id)), username });
       showRecoveryCode(keyBundle.recoveryCode);
     } catch (error) {
       showAuthError(error, "Could not create your account.");

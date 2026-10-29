@@ -1638,3 +1638,9 @@ canvas {
   padding-left: 4px;
   background: transparent;
 }
+.signup-either {
+  display: block;
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: var(--teal);
+}
