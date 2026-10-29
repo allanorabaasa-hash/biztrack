@@ -372,6 +372,38 @@ h3,
 .brand span {
   color: var(--amber);
 }
+/* Rising Bars logo mark beside the BizTrack name */
+.brand,
+.mobile-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+}
+.mobile-brand .brand-mark {
+  width: 26px;
+  height: 26px;
+}
+.brand .brand-word {
+  color: #fff;
+}
+.mobile-brand .brand-word {
+  color: var(--teal);
+}
+.brand .brand-word span,
+.mobile-brand .brand-word span {
+  color: var(--amber);
+}
+.auth-brand .brand-word {
+  color: var(--teal);
+}
+.auth-brand .brand-word span {
+  color: #a35f00;
+}
 .business-picker {
   padding: 0 8px 16px;
 }
